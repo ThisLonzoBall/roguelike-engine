@@ -1,0 +1,10 @@
+# Build output (Visual Studio's CMake integration uses out/, CLI builds use build/)
+out/
+build/
+.vs/
+CMakeSettings.json
+CMakeUserPresets.json
+
+# IDE
+.vscode/
+*.user
