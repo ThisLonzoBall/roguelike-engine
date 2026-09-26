@@ -22,7 +22,11 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(SDL3)
 
 # --- Game --------------------------------------------------------------------
-add_executable(game src/main.cpp)
+add_executable(game
+    src/main.cpp
+    src/input.cpp
+    src/player.cpp
+)
 target_link_libraries(game PRIVATE SDL3::SDL3)
 
 if(MSVC)
