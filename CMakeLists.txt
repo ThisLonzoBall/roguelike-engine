@@ -22,11 +22,16 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(SDL3)
 
 # --- Game --------------------------------------------------------------------
+# Engine code lives in src/engine/, game code in src/game/. Engine never
+# includes game headers. Includes are written relative to src/.
 add_executable(game
     src/main.cpp
-    src/input.cpp
-    src/player.cpp
+    src/engine/gl.cpp
+    src/engine/input.cpp
+    src/engine/renderer.cpp
+    src/game/player.cpp
 )
+target_include_directories(game PRIVATE src)
 target_link_libraries(game PRIVATE SDL3::SDL3)
 
 if(MSVC)

@@ -1,10 +1,9 @@
 #pragma once
 
-#include <SDL3/SDL.h>
-
-#include "math.h"
+#include "engine/math.h"
 
 class Input;
+class Renderer;
 
 // The player is always in exactly one state; each state owns its own rules.
 // Attacks, specials, hit-stun etc. will be added as further states.
@@ -31,4 +30,4 @@ struct Player {
 void updatePlayer(Player& player, const Input& input, float dt);
 
 // alpha: 0..1 blend between the previous and current tick.
-void drawPlayer(SDL_Renderer* renderer, const Player& player, float alpha);
+void drawPlayer(Renderer& renderer, const Player& player, float alpha);

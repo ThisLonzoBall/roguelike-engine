@@ -5,7 +5,7 @@
 #include <array>
 #include <vector>
 
-#include "math.h"
+#include "engine/math.h"
 
 // Gameplay code asks about actions, never about physical keys. Bindings live
 // in one table, which is where rebinding and gamepad support will plug in.

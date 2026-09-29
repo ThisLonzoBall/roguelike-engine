@@ -1,6 +1,7 @@
-#include "player.h"
+#include "game/player.h"
 
-#include "input.h"
+#include "engine/input.h"
+#include "engine/renderer.h"
 
 namespace {
 
@@ -53,22 +54,16 @@ void updatePlayer(Player& player, const Input& input, float dt) {
     }
 }
 
-void drawPlayer(SDL_Renderer* renderer, const Player& player, float alpha) {
+void drawPlayer(Renderer& renderer, const Player& player, float alpha) {
     Vec2 p = lerp(player.prevPos, player.pos, alpha);
 
     // Body: orange normally, pale blue while dashing so the state is visible.
-    SDL_FRect body{p.x - kSize / 2, p.y - kSize / 2, kSize, kSize};
-    if (player.state == PlayerState::Dashing) {
-        SDL_SetRenderDrawColor(renderer, 170, 220, 255, 255);
-    } else {
-        SDL_SetRenderDrawColor(renderer, 230, 110, 60, 255);
-    }
-    SDL_RenderFillRect(renderer, &body);
+    Color bodyColor = player.state == PlayerState::Dashing ? Color{170, 220, 255, 255}
+                                                           : Color{230, 110, 60, 255};
+    renderer.drawRect({p.x - kSize / 2, p.y - kSize / 2, kSize, kSize}, bodyColor);
 
     // Facing indicator: small square just outside the body.
     constexpr float kDot = 8.0f;
     Vec2 d = p + player.facing * (kSize * 0.75f);
-    SDL_FRect dot{d.x - kDot / 2, d.y - kDot / 2, kDot, kDot};
-    SDL_SetRenderDrawColor(renderer, 255, 240, 200, 255);
-    SDL_RenderFillRect(renderer, &dot);
+    renderer.drawRect({d.x - kDot / 2, d.y - kDot / 2, kDot, kDot}, {255, 240, 200, 255});
 }

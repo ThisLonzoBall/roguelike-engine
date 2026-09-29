@@ -1,4 +1,4 @@
-#include "input.h"
+#include "engine/input.h"
 
 Input::Input()
     : bindings_{
