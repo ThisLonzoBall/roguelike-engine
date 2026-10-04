@@ -2,6 +2,8 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <string>
 #include <utility>
@@ -89,6 +91,30 @@ GLuint linkProgram(const char* vsSource, const char* fsSource) {
         return 0;
     }
     return program;
+}
+
+// White disc with an anti-aliased alpha edge, filling the whole texture.
+// Tinted and scaled, it draws a circle of any size and color.
+constexpr int kCircleTextureSize = 64;
+
+Texture makeCircleTexture(int size) {
+    std::vector<uint8_t> pixels(static_cast<size_t>(size) * size * 4);
+    float center = size / 2.0f;
+    float radius = center - 0.5f;
+
+    for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+            float dx = x + 0.5f - center;
+            float dy = y + 0.5f - center;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            float coverage = std::clamp(radius - dist + 0.5f, 0.0f, 1.0f);
+
+            uint8_t* p = &pixels[(static_cast<size_t>(y) * size + x) * 4];
+            p[0] = p[1] = p[2] = 255;
+            p[3] = static_cast<uint8_t>(coverage * 255.0f + 0.5f);
+        }
+    }
+    return Texture::fromPixels(size, size, pixels.data(), TextureFilter::Linear);
 }
 
 }  // namespace
@@ -190,6 +216,7 @@ bool Renderer::init() {
     // 1x1 white texture: solid-color rects are just quads tinted with this.
     const uint8_t white[4] = {255, 255, 255, 255};
     white_ = Texture::fromPixels(1, 1, white);
+    circle_ = makeCircleTexture(kCircleTextureSize);
 
     vertices_.reserve(kMaxQuads * kVerticesPerQuad);
 
@@ -198,9 +225,10 @@ bool Renderer::init() {
     return true;
 }
 
-void Renderer::beginFrame(int viewportPxW, int viewportPxH, float viewW, float viewH) {
+void Renderer::beginFrame(int viewportX, int viewportY, int viewportW, int viewportH,
+                          float viewW, float viewH) {
     stats_ = {};
-    gl::Viewport(0, 0, viewportPxW, viewportPxH);
+    gl::Viewport(viewportX, viewportY, viewportW, viewportH);
 
     // Orthographic projection (column-major): maps x [0, viewW] -> [-1, 1] and
     // y [0, viewH] -> [1, -1], so the origin is the top-left corner, y down.
@@ -240,6 +268,11 @@ void Renderer::drawQuad(const Texture& texture, Rect dst, Rect uv, Color tint) {
 
 void Renderer::drawRect(Rect dst, Color color) {
     drawQuad(white_, dst, {0.0f, 0.0f, 1.0f, 1.0f}, color);
+}
+
+void Renderer::drawCircle(Vec2 center, float radius, Color color) {
+    drawQuad(circle_, {center.x - radius, center.y - radius, radius * 2.0f, radius * 2.0f},
+             {0.0f, 0.0f, 1.0f, 1.0f}, color);
 }
 
 void Renderer::endFrame() { flush(); }

@@ -4,19 +4,13 @@
 #include <vector>
 
 #include "engine/gl.h"
+#include "engine/math.h"
 
 struct Color {
     uint8_t r = 255;
     uint8_t g = 255;
     uint8_t b = 255;
     uint8_t a = 255;
-};
-
-struct Rect {
-    float x = 0.0f;
-    float y = 0.0f;
-    float w = 0.0f;
-    float h = 0.0f;
 };
 
 enum class TextureFilter { Nearest, Linear };
@@ -63,12 +57,15 @@ public:
     // Requires a current GL context with functions loaded.
     bool init();
 
-    // viewportPx: framebuffer size in pixels. view: size of the visible area in
-    // view units (window size in logical points for now; a camera comes later).
-    void beginFrame(int viewportPxW, int viewportPxH, float viewW, float viewH);
+    // viewport: the region of the framebuffer to draw into, in pixels (GL
+    // convention: origin bottom-left). view: size of the visible area in view
+    // units, stretched to fill the viewport.
+    void beginFrame(int viewportX, int viewportY, int viewportW, int viewportH, float viewW,
+                    float viewH);
     void clear(Color color);
     void drawQuad(const Texture& texture, Rect dst, Rect uv, Color tint = {});
     void drawRect(Rect dst, Color color);
+    void drawCircle(Vec2 center, float radius, Color color);
     void endFrame();
 
     struct Stats {
@@ -93,6 +90,7 @@ private:
     GLuint ebo_ = 0;
 
     Texture white_;
+    Texture circle_;
     std::vector<Vertex> vertices_;
     GLuint batchTexture_ = 0;
     Stats stats_;

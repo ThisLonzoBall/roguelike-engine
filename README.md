@@ -7,6 +7,7 @@ A Hades-style action roguelike and the small custom engine underneath it, writte
 - **Milestone 1** — SDL3 window with a 60 Hz fixed-timestep game loop and interpolated rendering
 - **Milestone 2** — Input actions, player state machine, dash with cooldown and input buffering
 - **Milestone 3** — Custom OpenGL 3.3 sprite-batching renderer
+- **Milestone 4** — World with walls and chasing enemies, circle/box collision, contact hits with i-frames
 
 ## Building
 
@@ -24,8 +25,8 @@ On Windows you can also open the folder directly in Visual Studio, which picks u
 ```
 src/
   main.cpp     entry point and game loop
-  engine/      GL loader, renderer, input, math
-  game/        player and gameplay code
+  engine/      GL loader, renderer, input, collision, math
+  game/        world, player, enemies
 ```
 
 Engine code never includes game headers; includes are written relative to `src/`.
