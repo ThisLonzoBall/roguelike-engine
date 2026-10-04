@@ -22,3 +22,11 @@ inline Vec2 normalize(Vec2 v) {
 }
 
 inline Vec2 lerp(Vec2 a, Vec2 b, float t) { return a + (b - a) * t; }
+
+// Axis-aligned rectangle; (x, y) is the top-left corner.
+struct Rect {
+    float x = 0.0f;
+    float y = 0.0f;
+    float w = 0.0f;
+    float h = 0.0f;
+};

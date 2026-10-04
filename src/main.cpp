@@ -1,17 +1,15 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include <algorithm>
 #include <cstdio>
 
 #include "engine/gl.h"
 #include "engine/input.h"
 #include "engine/renderer.h"
-#include "game/player.h"
+#include "game/world.h"
 
 // --- Config ------------------------------------------------------------------
-constexpr int kWindowWidth = 1280;
-constexpr int kWindowHeight = 720;
-
 // Simulation runs at a fixed rate regardless of frame rate, so gameplay
 // (movement, hit timing, dash distance) is identical on every machine.
 constexpr double kTickRate = 60.0;
@@ -21,8 +19,6 @@ constexpr double kDt = 1.0 / kTickRate;
 // long stall (breakpoint, window drag) where we'd try to catch up forever.
 constexpr double kMaxFrameTime = 0.25;
 
-constexpr float kFloorTileSize = 64.0f;
-
 // --- Game loop -----------------------------------------------------------------
 // Separate from main() so every GL resource (renderer, textures) is destroyed
 // before the GL context it belongs to.
@@ -30,18 +26,9 @@ static void run(SDL_Window* window) {
     Renderer renderer;
     if (!renderer.init()) return;
 
-    // 2x2 checkerboard, repeated across the screen as a placeholder floor.
-    const uint8_t floorPixels[] = {
-        38, 38, 50, 255,  30, 30, 40, 255,
-        30, 30, 40, 255,  38, 38, 50, 255,
-    };
-    Texture floor = Texture::fromPixels(2, 2, floorPixels, TextureFilter::Nearest,
-                                        TextureWrap::Repeat);
-
+    WorldTextures textures = createWorldTextures();
+    World world = createWorld();
     Input input;
-    Player player;
-    player.pos = {kWindowWidth / 2.0f, kWindowHeight / 2.0f};
-    player.prevPos = player.pos;
 
     Uint64 previousTime = SDL_GetTicksNS();
     double accumulator = 0.0;
@@ -70,7 +57,7 @@ static void run(SDL_Window* window) {
 
         // 3. Run as many fixed ticks as real time requires
         while (accumulator >= kDt) {
-            updatePlayer(player, input, static_cast<float>(kDt));
+            updateWorld(world, input, static_cast<float>(kDt));
             input.consumePresses();
             accumulator -= kDt;
         }
@@ -78,19 +65,19 @@ static void run(SDL_Window* window) {
         // 4. Draw, interpolating between the last two ticks
         float alpha = static_cast<float>(accumulator / kDt);
 
-        // Logical size (view units) vs. pixel size differ on high-DPI displays.
-        int viewW = 0, viewH = 0, pixelW = 0, pixelH = 0;
-        SDL_GetWindowSize(window, &viewW, &viewH);
+        // Letterbox: scale the fixed-size room to the largest rectangle of the
+        // same aspect ratio that fits the window, centered. The clear covers
+        // the whole window, so the bars get the clear color.
+        int pixelW = 0, pixelH = 0;
         SDL_GetWindowSizeInPixels(window, &pixelW, &pixelH);
+        float scale = std::min(pixelW / kRoomWidth, pixelH / kRoomHeight);
+        int viewportW = static_cast<int>(kRoomWidth * scale);
+        int viewportH = static_cast<int>(kRoomHeight * scale);
 
-        renderer.beginFrame(pixelW, pixelH, static_cast<float>(viewW), static_cast<float>(viewH));
-        renderer.clear({20, 20, 28, 255});
-
-        // UVs beyond 1.0 make the repeat-wrapped texture tile; each texel is one tile.
-        float tilesX = viewW / kFloorTileSize, tilesY = viewH / kFloorTileSize;
-        renderer.drawQuad(floor, {0.0f, 0.0f, static_cast<float>(viewW), static_cast<float>(viewH)},
-                          {0.0f, 0.0f, tilesX / 2.0f, tilesY / 2.0f});
-        drawPlayer(renderer, player, alpha);
+        renderer.beginFrame((pixelW - viewportW) / 2, (pixelH - viewportH) / 2, viewportW,
+                            viewportH, kRoomWidth, kRoomHeight);
+        renderer.clear({12, 12, 16, 255});
+        drawWorld(renderer, textures, world, alpha);
 
         renderer.endFrame();
         SDL_GL_SwapWindow(window);
@@ -122,7 +109,8 @@ int main(int, char**) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
-    SDL_Window* window = SDL_CreateWindow("Roguelike", kWindowWidth, kWindowHeight,
+    SDL_Window* window = SDL_CreateWindow("Roguelike", static_cast<int>(kRoomWidth),
+                                          static_cast<int>(kRoomHeight),
                                           SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
                                               SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!window) {

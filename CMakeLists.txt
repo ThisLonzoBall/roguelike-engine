@@ -26,10 +26,12 @@ FetchContent_MakeAvailable(SDL3)
 # includes game headers. Includes are written relative to src/.
 add_executable(game
     src/main.cpp
+    src/engine/collision.cpp
     src/engine/gl.cpp
     src/engine/input.cpp
     src/engine/renderer.cpp
     src/game/player.cpp
+    src/game/world.cpp
 )
 target_include_directories(game PRIVATE src)
 target_link_libraries(game PRIVATE SDL3::SDL3)
