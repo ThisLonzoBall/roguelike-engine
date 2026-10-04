@@ -1,0 +1,8 @@
+# Normalize line endings so Windows and WSL checkouts agree
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.wav binary
+*.ogg binary
+*.ttf binary
