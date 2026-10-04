@@ -2,6 +2,7 @@
 #include <SDL3/SDL_main.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 #include "engine/gl.h"
@@ -74,8 +75,11 @@ static void run(SDL_Window* window) {
         int viewportW = static_cast<int>(kRoomWidth * scale);
         int viewportH = static_cast<int>(kRoomHeight * scale);
 
+        // Wrapped so the float keeps sub-millisecond precision over long sessions.
+        float shakeTime = static_cast<float>(std::fmod(static_cast<double>(now) / 1e9, 1000.0));
+
         renderer.beginFrame((pixelW - viewportW) / 2, (pixelH - viewportH) / 2, viewportW,
-                            viewportH, kRoomWidth, kRoomHeight);
+                            viewportH, kRoomWidth, kRoomHeight, shakeOffset(world, shakeTime));
         renderer.clear({12, 12, 16, 255});
         drawWorld(renderer, textures, world, alpha);
 

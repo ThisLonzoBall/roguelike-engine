@@ -12,6 +12,8 @@ Input::Input()
           {SDL_SCANCODE_RIGHT, Action::MoveRight},
           {SDL_SCANCODE_SPACE, Action::Dash},
           {SDL_SCANCODE_LSHIFT, Action::Dash},
+          {SDL_SCANCODE_J, Action::Attack},
+          {SDL_SCANCODE_X, Action::Attack},
       } {}
 
 void Input::handleEvent(const SDL_Event& event) {

@@ -8,6 +8,16 @@ A Hades-style action roguelike and the small custom engine underneath it, writte
 - **Milestone 2** — Input actions, player state machine, dash with cooldown and input buffering
 - **Milestone 3** — Custom OpenGL 3.3 sprite-batching renderer
 - **Milestone 4** — World with walls and chasing enemies, circle/box collision, contact hits with i-frames
+- **Milestone 5** — Melee attack, health and death, enemy waves, knockback, hitstop, screen shake, particles
+
+## Controls
+
+| Action | Keys |
+| --- | --- |
+| Move | WASD or arrow keys |
+| Dash | Space or Left Shift |
+| Attack | J or X |
+| Quit | Esc |
 
 ## Building
 
@@ -25,7 +35,7 @@ On Windows you can also open the folder directly in Visual Studio, which picks u
 ```
 src/
   main.cpp     entry point and game loop
-  engine/      GL loader, renderer, input, collision, math
+  engine/      GL loader, renderer, input, collision, math, RNG
   game/        world, player, enemies
 ```
 
