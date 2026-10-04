@@ -1,6 +1,5 @@
 #include "game/player.h"
 
-#include "engine/collision.h"
 #include "engine/input.h"
 #include "engine/renderer.h"
 
@@ -11,9 +10,21 @@ constexpr float kMoveSpeed = 300.0f;   // px/s
 constexpr float kDashSpeed = 1400.0f;  // px/s -> 9 ticks covers ~210 px
 constexpr int kDashTicks = 9;          // 0.15 s
 constexpr int kDashCooldownTicks = 18; // 0.30 s, measured from dash start
-constexpr int kDashBufferTicks = 6;    // 0.10 s early-press window
+constexpr int kInputBufferTicks = 6;   // 0.10 s early-press window (dash and attack)
 
-constexpr int kHitInvulnTicks = 45;    // 0.75 s
+// Attack phases. Only the active phase has a hitbox; recovery is the
+// commitment cost and can be cancelled into a dash.
+constexpr int kAttackStartupTicks = 3;
+constexpr int kAttackActiveTicks = 4;
+constexpr int kAttackRecoveryTicks = 9;
+constexpr int kAttackTotalTicks = kAttackStartupTicks + kAttackActiveTicks + kAttackRecoveryTicks;
+constexpr float kAttackReach = 30.0f;       // hitbox center, distance in front of the player
+constexpr float kAttackRadius = 30.0f;
+constexpr float kAttackLungeSpeed = 90.0f;  // px/s forward during wind-up and active
+
+constexpr float kKnockbackSpeed = 420.0f;   // px/s initial
+constexpr float kKnockbackDecay = 0.82f;    // per tick
+constexpr int kHitInvulnTicks = 45;         // 0.75 s
 constexpr int kHitFlashTicks = 8;
 
 void startDash(Player& player) {
@@ -24,48 +35,133 @@ void startDash(Player& player) {
     player.dashBufferTicks = 0;
 }
 
+void startAttack(Player& player) {
+    player.state = PlayerState::Attacking;
+    player.stateTicks = kAttackTotalTicks;
+    player.attackBufferTicks = 0;
+    ++player.attackId;
+}
+
+bool canDash(const Player& player) {
+    return player.dashBufferTicks > 0 && player.dashCooldownTicks == 0;
+}
+
+// Ticks elapsed in the current swing, counting the current tick (1-based).
+int attackElapsed(const Player& player) { return kAttackTotalTicks - player.stateTicks; }
+
 }  // namespace
 
 bool isInvulnerable(const Player& player) {
-    return player.state == PlayerState::Dashing || player.hitInvulnTicks > 0;
+    return player.state == PlayerState::Dashing || player.state == PlayerState::Dead ||
+           player.hitInvulnTicks > 0;
 }
 
-void hitPlayer(Player& player) {
-    player.hitInvulnTicks = kHitInvulnTicks;
+void hitPlayer(Player& player, Vec2 awayDir, int damage) {
+    player.hp -= damage;
     player.hitFlashTicks = kHitFlashTicks;
+    if (player.hp <= 0) {
+        player.hp = 0;
+        player.state = PlayerState::Dead;
+        return;
+    }
+
+    player.hitInvulnTicks = kHitInvulnTicks;
+    player.knockback = awayDir * kKnockbackSpeed;
+    if (player.state == PlayerState::Attacking) player.state = PlayerState::Normal;  // interrupted
+}
+
+bool isAttackActive(const Player& player) {
+    if (player.state != PlayerState::Attacking) return false;
+    int elapsed = attackElapsed(player);
+    return elapsed > kAttackStartupTicks && elapsed <= kAttackStartupTicks + kAttackActiveTicks;
+}
+
+Circle attackHitbox(const Player& player) {
+    return {player.pos + player.facing * kAttackReach, kAttackRadius};
+}
+
+void bufferPlayerInput(Player& player, const Input& input) {
+    if (input.pressed(Action::Dash)) player.dashBufferTicks = kInputBufferTicks;
+    if (input.pressed(Action::Attack)) player.attackBufferTicks = kInputBufferTicks;
 }
 
 void updatePlayer(Player& player, const Input& input, std::span<const Rect> walls, float dt) {
     player.prevPos = player.pos;
+    if (player.state == PlayerState::Dead) return;
 
     if (player.dashCooldownTicks > 0) --player.dashCooldownTicks;
     if (player.dashBufferTicks > 0) --player.dashBufferTicks;
+    if (player.attackBufferTicks > 0) --player.attackBufferTicks;
     if (player.hitInvulnTicks > 0) --player.hitInvulnTicks;
     if (player.hitFlashTicks > 0) --player.hitFlashTicks;
-    if (input.pressed(Action::Dash)) player.dashBufferTicks = kDashBufferTicks;
+    bufferPlayerInput(player, input);
 
+    // Facing is locked for the duration of a swing.
     Vec2 move = input.moveAxis();
-    if (lengthSq(move) > 0.0f) player.facing = move;
+    if (lengthSq(move) > 0.0f && player.state != PlayerState::Attacking) player.facing = move;
 
+    Vec2 velocity;
     switch (player.state) {
     case PlayerState::Normal:
-        if (player.dashBufferTicks > 0 && player.dashCooldownTicks == 0) {
+        if (canDash(player)) {
             startDash(player);
+        } else if (player.attackBufferTicks > 0) {
+            startAttack(player);
         } else {
-            player.pos = moveCircle(player.pos, player.radius, move * (kMoveSpeed * dt), walls);
+            velocity = move * kMoveSpeed;
         }
         break;
 
     case PlayerState::Dashing:
-        player.pos =
-            moveCircle(player.pos, player.radius, player.dashDir * (kDashSpeed * dt), walls);
+        velocity = player.dashDir * kDashSpeed;
         if (--player.stateTicks <= 0) player.state = PlayerState::Normal;
         break;
+
+    case PlayerState::Attacking: {
+        --player.stateTicks;
+        bool inRecovery = attackElapsed(player) > kAttackStartupTicks + kAttackActiveTicks;
+        if (inRecovery && canDash(player)) {
+            startDash(player);  // dash-cancel
+        } else if (player.stateTicks <= 0) {
+            player.state = PlayerState::Normal;
+        } else if (!inRecovery) {
+            velocity = player.facing * kAttackLungeSpeed;
+        }
+        break;
     }
+
+    case PlayerState::Dead:
+        break;
+    }
+
+    // Knockback rides on top of whatever the state is doing, then bleeds off.
+    velocity += player.knockback;
+    player.knockback = player.knockback * kKnockbackDecay;
+    if (lengthSq(player.knockback) < 1.0f) player.knockback = {};
+
+    player.pos = moveCircle(player.pos, player.radius, velocity * dt, walls);
 }
 
 void drawPlayer(Renderer& renderer, const Player& player, float alpha) {
+    if (player.state == PlayerState::Dead) return;
     Vec2 p = lerp(player.prevPos, player.pos, alpha);
+
+    // Swing: bright while the hitbox is live, fading out through recovery.
+    if (player.state == PlayerState::Attacking) {
+        int elapsed = attackElapsed(player);
+        int sinceActive = elapsed - kAttackStartupTicks;
+        uint8_t swingAlpha = 0;
+        if (isAttackActive(player)) {
+            swingAlpha = 150;
+        } else if (sinceActive > kAttackActiveTicks) {
+            int fadeLeft = kAttackTotalTicks - elapsed;
+            swingAlpha = static_cast<uint8_t>(90 * fadeLeft / kAttackRecoveryTicks);
+        }
+        if (swingAlpha > 0) {
+            renderer.drawCircle(p + player.facing * kAttackReach, kAttackRadius,
+                                {255, 240, 200, swingAlpha});
+        }
+    }
 
     // Body color shows state: red flash on hit, pale blue while dashing,
     // blinking during the post-hit mercy window, orange otherwise.

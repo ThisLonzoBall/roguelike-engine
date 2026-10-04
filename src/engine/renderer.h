@@ -59,9 +59,10 @@ public:
 
     // viewport: the region of the framebuffer to draw into, in pixels (GL
     // convention: origin bottom-left). view: size of the visible area in view
-    // units, stretched to fill the viewport.
+    // units, stretched to fill the viewport. viewOrigin: the view-space point
+    // shown at the top-left corner (used for screen shake; a camera later).
     void beginFrame(int viewportX, int viewportY, int viewportW, int viewportH, float viewW,
-                    float viewH);
+                    float viewH, Vec2 viewOrigin = {});
     void clear(Color color);
     void drawQuad(const Texture& texture, Rect dst, Rect uv, Color tint = {});
     void drawRect(Rect dst, Color color);

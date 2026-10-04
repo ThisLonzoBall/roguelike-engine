@@ -226,17 +226,20 @@ bool Renderer::init() {
 }
 
 void Renderer::beginFrame(int viewportX, int viewportY, int viewportW, int viewportH,
-                          float viewW, float viewH) {
+                          float viewW, float viewH, Vec2 viewOrigin) {
     stats_ = {};
     gl::Viewport(viewportX, viewportY, viewportW, viewportH);
 
-    // Orthographic projection (column-major): maps x [0, viewW] -> [-1, 1] and
-    // y [0, viewH] -> [1, -1], so the origin is the top-left corner, y down.
+    // Orthographic projection (column-major): maps x [ox, ox + viewW] -> [-1, 1]
+    // and y [oy, oy + viewH] -> [1, -1], so viewOrigin is the top-left corner
+    // and y points down.
+    const float sx = 2.0f / viewW;
+    const float sy = -2.0f / viewH;
     const float projection[16] = {
-        2.0f / viewW, 0.0f,          0.0f,  0.0f,
-        0.0f,         -2.0f / viewH, 0.0f,  0.0f,
-        0.0f,         0.0f,          -1.0f, 0.0f,
-        -1.0f,        1.0f,          0.0f,  1.0f,
+        sx,                        0.0f,                     0.0f,  0.0f,
+        0.0f,                      sy,                       0.0f,  0.0f,
+        0.0f,                      0.0f,                     -1.0f, 0.0f,
+        -1.0f - sx * viewOrigin.x, 1.0f - sy * viewOrigin.y, 0.0f,  1.0f,
     };
 
     gl::UseProgram(program_);
