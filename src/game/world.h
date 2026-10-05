@@ -7,12 +7,9 @@
 #include "engine/random.h"
 #include "engine/renderer.h"
 #include "game/player.h"
+#include "game/room.h"
 
 class Input;
-
-// The room is a fixed size in game units; the window scales it to fit.
-constexpr float kRoomWidth = 1280.0f;
-constexpr float kRoomHeight = 720.0f;
 
 struct Enemy {
     Vec2 pos;
@@ -39,18 +36,34 @@ struct Particle {
     Color color;
 };
 
-// Everything that exists in the current room. Plain typed lists for now; this
-// is the place a more general entity system would grow out of.
+// How the current room ended, if it has. The Game layer reacts to this; the
+// World itself never loads or switches rooms.
+enum class RoomOutcome {
+    None,    // still being played
+    Exited,  // player walked through an open door
+    Died,    // player died and the death animation has finished
+};
+
+// The live state of the room being played. Built from a RoomDef and thrown
+// away when the room ends. Plain typed lists for now; this is the place a more
+// general entity system would grow out of.
 struct World {
-    std::vector<Rect> walls;  // static, solid
+    std::vector<Rect> walls;        // static level geometry
+    std::vector<Rect> doors;        // exits
+    std::vector<Rect> solids;       // what bodies collide with: walls, plus doors while locked
+    std::vector<Vec2> spawnPoints;
+    bool doorsOpen = false;
+    int depth = 1;                  // how many rooms into the run this is
+    RoomOutcome outcome = RoomOutcome::None;
+
     Player player;
     std::vector<Enemy> enemies;
     std::vector<Particle> particles;
 
     Rng rng;                 // all simulation randomness comes from here
-    int wave = 0;
-    int waveDelayTicks = 0;  // countdown to the next wave once the room is clear
-    int respawnTicks = 0;    // countdown to a reset after the player dies
+    int wavesRemaining = 0;  // waves still to spawn
+    int waveDelayTicks = 0;  // countdown to the next wave
+    int respawnTicks = 0;    // countdown from death to RoomOutcome::Died
 
     // Game feel.
     int hitstopTicks = 0;    // simulation is frozen while >0
@@ -63,8 +76,9 @@ struct WorldTextures {
     Texture floor;
 };
 
-// Builds the hard-coded test room. Rooms will come from data files later.
-World createWorld();
+// Builds a fresh world from a room template. `depth` scales the number of
+// enemies per wave; `seed` drives all randomness inside the room.
+World createWorld(const RoomDef& room, int depth, uint32_t seed);
 WorldTextures createWorldTextures();
 
 // Advances the whole world by one fixed simulation tick.

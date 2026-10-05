@@ -27,13 +27,20 @@ FetchContent_MakeAvailable(SDL3)
 add_executable(game
     src/main.cpp
     src/engine/collision.cpp
+    src/engine/file.cpp
     src/engine/gl.cpp
     src/engine/input.cpp
     src/engine/renderer.cpp
+    src/game/game.cpp
     src/game/player.cpp
+    src/game/room.cpp
     src/game/world.cpp
 )
 target_include_directories(game PRIVATE src)
+
+# Development builds read data straight from the source tree, so room files
+# can be edited (and hot-reloaded with F5) without rebuilding or copying.
+target_compile_definitions(game PRIVATE GAME_DEV_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets")
 target_link_libraries(game PRIVATE SDL3::SDL3)
 
 if(MSVC)

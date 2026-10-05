@@ -4,11 +4,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 
+#include "engine/file.h"
 #include "engine/gl.h"
 #include "engine/input.h"
 #include "engine/renderer.h"
-#include "game/world.h"
+#include "game/game.h"
 
 // --- Config ------------------------------------------------------------------
 // Simulation runs at a fixed rate regardless of frame rate, so gameplay
@@ -20,6 +22,18 @@ constexpr double kDt = 1.0 / kTickRate;
 // long stall (breakpoint, window drag) where we'd try to catch up forever.
 constexpr double kMaxFrameTime = 0.25;
 
+// Room files are read from the source tree in development builds, so edits
+// show up without rebuilding (and F5 reloads them live). Otherwise they're
+// expected in an assets/ folder next to the executable.
+static std::string findRoomDir() {
+#ifdef GAME_DEV_ASSET_DIR
+    std::string devDir = std::string(GAME_DEV_ASSET_DIR) + "/rooms";
+    if (directoryExists(devDir)) return devDir;
+#endif
+    const char* basePath = SDL_GetBasePath();
+    return std::string(basePath ? basePath : "") + "assets/rooms";
+}
+
 // --- Game loop -----------------------------------------------------------------
 // Separate from main() so every GL resource (renderer, textures) is destroyed
 // before the GL context it belongs to.
@@ -28,7 +42,7 @@ static void run(SDL_Window* window) {
     if (!renderer.init()) return;
 
     WorldTextures textures = createWorldTextures();
-    World world = createWorld();
+    Game game = createGame(findRoomDir(), static_cast<uint32_t>(SDL_GetPerformanceCounter()));
     Input input;
 
     Uint64 previousTime = SDL_GetTicksNS();
@@ -44,7 +58,10 @@ static void run(SDL_Window* window) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) running = false;
-            if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) running = false;
+            if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+                if (event.key.key == SDLK_ESCAPE) running = false;
+                if (event.key.key == SDLK_F5) reloadRooms(game);
+            }
             input.handleEvent(event);
         }
         input.sampleHeld();
@@ -58,7 +75,7 @@ static void run(SDL_Window* window) {
 
         // 3. Run as many fixed ticks as real time requires
         while (accumulator >= kDt) {
-            updateWorld(world, input, static_cast<float>(kDt));
+            updateGame(game, input, static_cast<float>(kDt));
             input.consumePresses();
             accumulator -= kDt;
         }
@@ -79,9 +96,10 @@ static void run(SDL_Window* window) {
         float shakeTime = static_cast<float>(std::fmod(static_cast<double>(now) / 1e9, 1000.0));
 
         renderer.beginFrame((pixelW - viewportW) / 2, (pixelH - viewportH) / 2, viewportW,
-                            viewportH, kRoomWidth, kRoomHeight, shakeOffset(world, shakeTime));
+                            viewportH, kRoomWidth, kRoomHeight,
+                            shakeOffset(game.world, shakeTime));
         renderer.clear({12, 12, 16, 255});
-        drawWorld(renderer, textures, world, alpha);
+        drawWorld(renderer, textures, game.world, alpha);
 
         renderer.endFrame();
         SDL_GL_SwapWindow(window);
@@ -89,9 +107,11 @@ static void run(SDL_Window* window) {
         // 5. Stats
         ++framesThisWindow;
         if (now - statsWindowStart >= SDL_NS_PER_SECOND) {
-            char title[128];
-            std::snprintf(title, sizeof(title), "Roguelike | %d fps | %d draw calls, %d quads",
-                          framesThisWindow, renderer.stats().drawCalls, renderer.stats().quads);
+            char title[192];
+            std::snprintf(title, sizeof(title),
+                          "Roguelike | Room %d: %s | %d fps | %d draw calls, %d quads", game.depth,
+                          currentRoom(game).name.c_str(), framesThisWindow,
+                          renderer.stats().drawCalls, renderer.stats().quads);
             SDL_SetWindowTitle(window, title);
             statsWindowStart = now;
             framesThisWindow = 0;
