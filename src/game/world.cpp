@@ -2,14 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
-#include <iterator>
 
 #include "engine/collision.h"
 
 namespace {
 
-constexpr float kWallThickness = 32.0f;
-constexpr float kFloorTileSize = 64.0f;
 
 // --- Tuning (durations in ticks, 60 per second) ------------------------------
 constexpr float kEnemySpeed = 140.0f;  // px/s
@@ -36,19 +33,19 @@ constexpr float kTraumaOnPlayerHit = 0.6f;
 constexpr float kTraumaDecayPerTick = 0.035f;
 constexpr float kMaxShakePixels = 12.0f;
 
+constexpr int kFirstWaveDelayTicks = 45;     // breathing room on entering
 constexpr int kWaveDelayTicks = 90;
 constexpr int kRespawnDelayTicks = 90;
 constexpr int kMaxEnemiesPerWave = 8;
 constexpr float kMinSpawnDistance = 250.0f;  // from the player
-
-constexpr Vec2 kSpawnPoints[] = {
-    {200.0f, 150.0f}, {1000.0f, 150.0f}, {1080.0f, 560.0f}, {160.0f, 600.0f},
-    {720.0f, 90.0f},  {160.0f, 360.0f},  {1120.0f, 360.0f}, {560.0f, 620.0f},
-};
+constexpr int kHealOnClear = 1;
+constexpr float kTraumaOnClear = 0.2f;
 
 constexpr Color kEnemyColor{120, 200, 90, 255};
 constexpr Color kPlayerColor{230, 110, 60, 255};
 constexpr Color kSparkColor{255, 240, 200, 255};
+constexpr Color kDoorLockedColor{120, 60, 50, 255};
+constexpr Color kDoorOpenColor{250, 210, 90, 255};
 
 // --- Effects -----------------------------------------------------------------
 
@@ -100,24 +97,61 @@ void freezeInterpolation(World& world) {
 
 // --- Spawning ----------------------------------------------------------------
 
+void spawnEnemy(World& world, Vec2 point) {
+    Enemy enemy;
+    enemy.pos = enemy.prevPos = point;
+    world.enemies.push_back(enemy);
+    spawnBurst(world, point, {}, 8, 160.0f, kEnemyColor);
+}
+
 void spawnWave(World& world) {
-    ++world.wave;
-    int count = std::min(2 + world.wave, kMaxEnemiesPerWave);
+    --world.wavesRemaining;
 
-    // Start at a random spawn point and walk the list, skipping any that are
-    // too close to the player.
-    const int pointCount = static_cast<int>(std::size(kSpawnPoints));
-    int start = static_cast<int>(world.rng.next() % pointCount);
-    for (int i = 0; i < pointCount && count > 0; ++i) {
-        Vec2 point = kSpawnPoints[(start + i) % pointCount];
-        if (length(point - world.player.pos) < kMinSpawnDistance) continue;
+    // One enemy per spawn point at most; deeper rooms use more of them.
+    const int pointCount = static_cast<int>(world.spawnPoints.size());
+    int count = std::min({2 + world.depth, kMaxEnemiesPerWave, pointCount});
 
-        Enemy enemy;
-        enemy.pos = enemy.prevPos = point;
-        world.enemies.push_back(enemy);
-        spawnBurst(world, point, {}, 8, 160.0f, kEnemyColor);
-        --count;
+    // Start at a random spawn point and walk the list. The first pass skips
+    // points too close to the player; if that leaves the wave short (a
+    // cramped room), a second pass fills in from the points that were skipped.
+    int start = static_cast<int>(world.rng.next() % static_cast<uint32_t>(pointCount));
+    std::vector<bool> used(world.spawnPoints.size(), false);
+    for (int pass = 0; pass < 2 && count > 0; ++pass) {
+        for (int i = 0; i < pointCount && count > 0; ++i) {
+            size_t index = static_cast<size_t>((start + i) % pointCount);
+            Vec2 point = world.spawnPoints[index];
+            if (used[index]) continue;
+            if (pass == 0 && length(point - world.player.pos) < kMinSpawnDistance) continue;
+
+            spawnEnemy(world, point);
+            used[index] = true;
+            --count;
+        }
     }
+}
+
+// --- Doors -------------------------------------------------------------------
+
+void openDoors(World& world) {
+    world.doorsOpen = true;
+    world.solids = world.walls;  // doors stop being solid
+
+    Player& player = world.player;
+    player.hp = std::min(player.maxHp, player.hp + kHealOnClear);
+
+    for (const Rect& door : world.doors) {
+        Vec2 center{door.x + door.w / 2.0f, door.y + door.h / 2.0f};
+        spawnBurst(world, center, {}, 16, 260.0f, kDoorOpenColor);
+    }
+    addTrauma(world, kTraumaOnClear);
+}
+
+bool touchesAnyDoor(const World& world) {
+    for (const Rect& door : world.doors) {
+        Vec2 probe = world.player.pos;
+        if (resolveCircleRect(probe, world.player.radius, door)) return true;
+    }
+    return false;
 }
 
 // --- Simulation --------------------------------------------------------------
@@ -143,7 +177,7 @@ void updateEnemies(World& world, float dt) {
         enemy.knockback = enemy.knockback * kKnockbackDecay;
         if (lengthSq(enemy.knockback) < 1.0f) enemy.knockback = {};
 
-        enemy.pos = moveCircle(enemy.pos, enemy.radius, velocity * dt, world.walls);
+        enemy.pos = moveCircle(enemy.pos, enemy.radius, velocity * dt, world.solids);
     }
 
     // Bodies are solid: push overlapping enemies apart, half each.
@@ -164,7 +198,7 @@ void updateEnemies(World& world, float dt) {
 
     // Separation may have pushed an enemy into a wall; walls win.
     for (Enemy& enemy : world.enemies) {
-        for (const Rect& wall : world.walls) resolveCircleRect(enemy.pos, enemy.radius, wall);
+        for (const Rect& solid : world.solids) resolveCircleRect(enemy.pos, enemy.radius, solid);
     }
 }
 
@@ -232,25 +266,22 @@ void resolveContactHits(World& world) {
 
 }  // namespace
 
-World createWorld() {
+World createWorld(const RoomDef& room, int depth, uint32_t seed) {
     World world;
+    world.walls = room.walls;
+    world.doors = room.doors;
+    world.spawnPoints = room.spawnPoints;
+    world.depth = depth;
 
-    // Outer walls.
-    world.walls.push_back({0.0f, 0.0f, kRoomWidth, kWallThickness});
-    world.walls.push_back({0.0f, kRoomHeight - kWallThickness, kRoomWidth, kWallThickness});
-    world.walls.push_back({0.0f, 0.0f, kWallThickness, kRoomHeight});
-    world.walls.push_back({kRoomWidth - kWallThickness, 0.0f, kWallThickness, kRoomHeight});
+    // Doors start locked, so they're solid.
+    world.solids = world.walls;
+    world.solids.insert(world.solids.end(), world.doors.begin(), world.doors.end());
 
-    // Pillars.
-    world.walls.push_back({400.0f, 250.0f, 96.0f, 96.0f});
-    world.walls.push_back({800.0f, 400.0f, 160.0f, 64.0f});
-    world.walls.push_back({600.0f, 120.0f, 48.0f, 160.0f});
-    world.walls.push_back({250.0f, 500.0f, 200.0f, 16.0f});  // thin: exercises anti-tunnelling
+    world.player.pos = world.player.prevPos = room.playerStart;
 
-    world.player.pos = {kRoomWidth / 2.0f, kRoomHeight / 2.0f};
-    world.player.prevPos = world.player.pos;
-
-    spawnWave(world);
+    world.rng.state = seed != 0 ? seed : 1;  // xorshift can't start at zero
+    world.wavesRemaining = room.waves;
+    world.waveDelayTicks = kFirstWaveDelayTicks;
     return world;
 }
 
@@ -279,21 +310,29 @@ void updateWorld(World& world, const Input& input, float dt) {
         return;
     }
 
-    // Dead: let the effects play out, then start over.
+    // Dead: let the effects play out, then report it.
     if (world.player.state == PlayerState::Dead) {
         freezeInterpolation(world);
         updateParticles(world, dt);
-        if (--world.respawnTicks <= 0) world = createWorld();
+        if (--world.respawnTicks <= 0) world.outcome = RoomOutcome::Died;
         return;
     }
 
-    updatePlayer(world.player, input, world.walls, dt);
+    updatePlayer(world.player, input, world.solids, dt);
     updateEnemies(world, dt);
     resolvePlayerAttack(world);
     resolveContactHits(world);
     updateParticles(world, dt);
 
-    if (world.enemies.empty() && --world.waveDelayTicks <= 0) spawnWave(world);
+    // Room flow: spawn waves until none are left, then open the doors.
+    if (world.enemies.empty() && !world.doorsOpen) {
+        if (world.wavesRemaining == 0) {
+            openDoors(world);
+        } else if (--world.waveDelayTicks <= 0) {
+            spawnWave(world);
+        }
+    }
+    if (world.doorsOpen && touchesAnyDoor(world)) world.outcome = RoomOutcome::Exited;
 }
 
 Vec2 shakeOffset(const World& world, float timeSeconds) {
@@ -312,10 +351,12 @@ void drawWorld(Renderer& renderer, const WorldTextures& textures, const World& w
 
     // UVs beyond 1.0 make the repeat-wrapped texture tile; each texel is one tile.
     renderer.drawQuad(textures.floor, {0.0f, 0.0f, kRoomWidth, kRoomHeight},
-                      {0.0f, 0.0f, kRoomWidth / (kFloorTileSize * 2.0f),
-                       kRoomHeight / (kFloorTileSize * 2.0f)});
+                      {0.0f, 0.0f, kRoomCols / 2.0f, kRoomRows / 2.0f});
 
     for (const Rect& wall : world.walls) renderer.drawRect(wall, {86, 86, 110, 255});
+    for (const Rect& door : world.doors) {
+        renderer.drawRect(door, world.doorsOpen ? kDoorOpenColor : kDoorLockedColor);
+    }
 
     for (const Enemy& enemy : world.enemies) {
         Color color = enemy.hitFlashTicks > 0 ? Color{255, 255, 255, 255} : kEnemyColor;
@@ -348,5 +389,13 @@ void drawWorld(Renderer& renderer, const WorldTextures& textures, const World& w
         Rect pip{48.0f + i * (kPip + kPipGap), 48.0f, kPip, kPip};
         renderer.drawRect(pip, i < world.player.hp ? Color{220, 60, 60, 255}
                                                    : Color{60, 40, 45, 255});
+    }
+
+    // HUD: one small marker per room reached in this run.
+    constexpr float kMark = 8.0f, kMarkGap = 4.0f;
+    constexpr int kMaxMarks = 40;
+    for (int i = 0; i < std::min(world.depth, kMaxMarks); ++i) {
+        float x = kRoomWidth - 48.0f - kMark - static_cast<float>(i) * (kMark + kMarkGap);
+        renderer.drawRect({x, 53.0f, kMark, kMark}, {250, 210, 90, 255});
     }
 }
