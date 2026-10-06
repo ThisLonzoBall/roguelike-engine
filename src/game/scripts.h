@@ -3,11 +3,13 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "engine/math.h"
 #include "engine/random.h"
 #include "engine/renderer.h"
+#include "game/stats.h"
 
 struct ScriptsImpl;  // the Lua side; defined in scripts.cpp
 
@@ -38,6 +40,26 @@ struct EnemyType {
 
     bool hasThink = false;     // false: the engine's built-in chase is used
     bool thinkBroken = false;  // think raised an error; fall back until reload
+};
+
+// A boon as defined by a script: an upgrade the player can pick after
+// clearing a room and keeps for the rest of the run.
+//
+//   Boon {
+//       name = "Heavy Blow",                    -- required, unique
+//       desc = "Attacks deal +1 damage.",       -- shown on the choice screen
+//       max_stacks = 2,                         -- times it can be taken (default 1)
+//       apply = function(stats)                 -- required; run once per stack
+//           stats.attack_damage = stats.attack_damage + 1
+//       end,
+//   }
+//
+// `stats` has one field per PlayerStats member (see game/stats.h for names).
+struct BoonDef {
+    std::string name;
+    std::string desc;
+    int maxStacks = 1;
+    bool applyBroken = false;  // apply raised an error; ignored until reload
 };
 
 // What the engine tells a think function about its enemy and the world.
@@ -76,7 +98,7 @@ public:
     // (sorted by name). Errors are logged with file and line; a file with an
     // error is abandoned at that point and the rest still load.
     // There is always at least one enemy type afterwards: if scripts define
-    // none, a built-in chaser is added.
+    // none, a built-in chaser is added. There may be no boons.
     void load(const std::string& scriptDir);
 
     const std::vector<EnemyType>& enemyTypes() const;
@@ -104,6 +126,15 @@ public:
     // If the type has no think function, or it raised an error, the built-in
     // chase is used instead.
     ThinkResult think(const ThinkInput& input, Rng& rng);
+
+    const std::vector<BoonDef>& boons() const;
+    int findBoon(std::string_view name) const;  // index into boons(), or -1
+
+    // The player's stats: `base` with every owned boon's apply function run
+    // over it, in order (a name appears once per stack). Results are clamped
+    // to sane ranges. A boon whose apply fails, or that isn't defined any
+    // more, is skipped.
+    PlayerStats computeStats(const PlayerStats& base, const std::vector<std::string>& ownedBoons);
 
     // Per-enemy script state is keyed by enemy id. Call when an enemy dies,
     // and when a new World replaces the old one.

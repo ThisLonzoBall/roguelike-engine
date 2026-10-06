@@ -19,6 +19,8 @@ struct ScriptsImpl {
     std::unique_ptr<ScriptVM> vm;
     std::vector<EnemyType> types;
     std::vector<int> thinkRefs;      // parallel to `types`; registry ref or LUA_NOREF
+    std::vector<BoonDef> boons;
+    std::vector<int> applyRefs;      // parallel to `boons`; registry ref
     int instancesRef = LUA_NOREF;    // registry ref: table of enemy id -> self table
     int contextRef = LUA_NOREF;      // registry ref: the ctx table, reused every call
     Rng* activeRng = nullptr;        // set only while a think function is running
@@ -151,6 +153,102 @@ int defineEnemy(lua_State* L) {
     return 0;
 }
 
+// Boon { ... } registers a boon.
+int defineBoon(lua_State* L) {
+    ScriptsImpl& impl = implOf(L);
+    luaL_checktype(L, 1, LUA_TTABLE);
+    rejectUnknownFields(L, 1, {"name", "desc", "max_stacks", "apply"});
+
+    // As in defineEnemy: plain values first, strings kept alive on the Lua stack.
+    lua_getfield(L, 1, "name");
+    if (lua_type(L, -1) != LUA_TSTRING || lua_rawlen(L, -1) == 0) {
+        luaL_error(L, "Boon needs a 'name' (a non-empty string)");
+    }
+    const char* name = lua_tostring(L, -1);
+    for (const BoonDef& existing : impl.boons) {
+        if (existing.name == name) luaL_error(L, "a boon named '%s' is already defined", name);
+    }
+
+    lua_getfield(L, 1, "desc");
+    if (!lua_isnil(L, -1) && lua_type(L, -1) != LUA_TSTRING) {
+        luaL_error(L, "'desc' must be a string");
+    }
+    const char* desc = lua_isnil(L, -1) ? "" : lua_tostring(L, -1);
+
+    double maxStacks = numberField(L, 1, "max_stacks", 1, 1, 99);
+
+    lua_getfield(L, 1, "apply");
+    if (!lua_isfunction(L, -1)) luaL_error(L, "Boon needs an 'apply' function");
+
+    // Nothing below can raise a Lua error.
+    int applyRef = luaL_ref(L, LUA_REGISTRYINDEX);  // pops the function
+
+    BoonDef boon;
+    boon.name = name;
+    boon.desc = desc;
+    boon.maxStacks = static_cast<int>(maxStacks);
+
+    impl.boons.push_back(std::move(boon));
+    impl.applyRefs.push_back(applyRef);
+    return 0;
+}
+
+// --- PlayerStats <-> Lua table -----------------------------------------------
+
+// One row per stat: its script name, where it lives, and the range it's
+// clamped to after boons have been applied.
+struct StatField {
+    const char* name;
+    int PlayerStats::* intMember;
+    float PlayerStats::* floatMember;
+    double min;
+    double max;
+};
+
+constexpr StatField kStatFields[] = {
+    {"max_hp", &PlayerStats::maxHp, nullptr, 1, 20},
+    {"move_speed", nullptr, &PlayerStats::moveSpeed, 50, 800},
+    {"dash_cooldown", &PlayerStats::dashCooldownTicks, nullptr, 0, 600},
+    {"attack_damage", &PlayerStats::attackDamage, nullptr, 1, 99},
+    {"attack_radius", nullptr, &PlayerStats::attackRadius, 8, 150},
+    // At least 1: the swing's state ends on its last tick, so with no recovery
+    // the final active tick would be lost.
+    {"attack_recovery", &PlayerStats::attackRecoveryTicks, nullptr, 1, 120},
+    {"knockback", nullptr, &PlayerStats::attackKnockback, 0, 3000},
+    {"mercy_ticks", &PlayerStats::hitInvulnTicks, nullptr, 0, 600},
+    {"heal_on_clear", &PlayerStats::healOnClear, nullptr, 0, 20},
+};
+
+void pushStats(lua_State* L, const PlayerStats& stats) {
+    lua_newtable(L);
+    for (const StatField& field : kStatFields) {
+        double value = field.intMember ? stats.*field.intMember : stats.*field.floatMember;
+        lua_pushnumber(L, value);
+        lua_setfield(L, -2, field.name);
+    }
+}
+
+// Reads the stats table at `index` into `out`. Returns the name of the first
+// field that isn't a finite number, or nullptr if all are fine.
+const char* readStats(lua_State* L, int index, PlayerStats& out) {
+    index = lua_absindex(L, index);
+    for (const StatField& field : kStatFields) {
+        lua_getfield(L, index, field.name);
+        bool isNumber = lua_type(L, -1) == LUA_TNUMBER;
+        double value = lua_tonumber(L, -1);
+        lua_pop(L, 1);
+        if (!isNumber || !std::isfinite(value)) return field.name;
+
+        value = value < field.min ? field.min : value > field.max ? field.max : value;
+        if (field.intMember) {
+            out.*field.intMember = static_cast<int>(std::floor(value + 0.5));
+        } else {
+            out.*field.floatMember = static_cast<float>(value);
+        }
+    }
+    return nullptr;
+}
+
 // rand() -> number in [0, 1) from the world's seeded generator.
 int scriptRand(lua_State* L) {
     ScriptsImpl& impl = implOf(L);
@@ -187,12 +285,18 @@ void Scripts::load(const std::string& scriptDir) {
     // A brand new VM, so nothing from the previous load survives.
     impl.types.clear();
     impl.thinkRefs.clear();
+    impl.boons.clear();
+    impl.applyRefs.clear();
     impl.vm = std::make_unique<ScriptVM>();
     lua_State* L = impl.vm->state();
 
     lua_pushlightuserdata(L, &impl);
     lua_pushcclosure(L, defineEnemy, 1);
     lua_setglobal(L, "Enemy");
+
+    lua_pushlightuserdata(L, &impl);
+    lua_pushcclosure(L, defineBoon, 1);
+    lua_setglobal(L, "Boon");
 
     lua_pushlightuserdata(L, &impl);
     lua_pushcclosure(L, scriptRand, 1);
@@ -226,6 +330,7 @@ void Scripts::load(const std::string& scriptDir) {
         SDL_Log("Loaded %d enemy type(s) from '%s'", static_cast<int>(impl.types.size()),
                 scriptDir.c_str());
     }
+    SDL_Log("Loaded %d boon(s)", static_cast<int>(impl.boons.size()));
 }
 
 const std::vector<EnemyType>& Scripts::enemyTypes() const { return impl_->types; }
@@ -355,6 +460,56 @@ ThinkResult Scripts::think(const ThinkInput& input, Rng& rng) {
 
     lua_settop(L, top);
     return result;
+}
+
+const std::vector<BoonDef>& Scripts::boons() const { return impl_->boons; }
+
+int Scripts::findBoon(std::string_view name) const {
+    for (size_t i = 0; i < impl_->boons.size(); ++i) {
+        if (impl_->boons[i].name == name) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+PlayerStats Scripts::computeStats(const PlayerStats& base,
+                                  const std::vector<std::string>& ownedBoons) {
+    ScriptsImpl& impl = *impl_;
+    PlayerStats stats = base;
+    if (!impl.vm) return stats;
+    lua_State* L = impl.vm->state();
+
+    for (const std::string& name : ownedBoons) {
+        int index = findBoon(name);
+        if (index < 0) continue;
+        BoonDef& boon = impl.boons[static_cast<size_t>(index)];
+        if (boon.applyBroken) continue;
+
+        // Each boon gets a fresh table holding the stats so far, so one that
+        // fails can't leave them half-changed. Stack: table, apply, table.
+        int top = lua_gettop(L);
+        pushStats(L, stats);
+        lua_rawgeti(L, LUA_REGISTRYINDEX, impl.applyRefs[static_cast<size_t>(index)]);
+        lua_pushvalue(L, -2);
+
+        std::string error;
+        bool ok = impl.vm->call(1, 0, error);
+        if (ok) {
+            PlayerStats updated = stats;
+            if (const char* badField = readStats(L, -1, updated)) {
+                ok = false;
+                error = std::string("apply left stats.") + badField + " as something other than a number";
+            } else {
+                stats = updated;
+            }
+        }
+        if (!ok) {
+            SDL_Log("Script error in boon '%s': %s. Ignoring this boon until scripts are reloaded.",
+                    boon.name.c_str(), error.c_str());
+            boon.applyBroken = true;
+        }
+        lua_settop(L, top);
+    }
+    return stats;
 }
 
 void Scripts::forgetEnemy(uint32_t id) {

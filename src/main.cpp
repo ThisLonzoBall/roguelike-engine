@@ -11,6 +11,7 @@
 #include "engine/input.h"
 #include "engine/renderer.h"
 #include "game/game.h"
+#include "game/ui.h"
 
 // --- Config ------------------------------------------------------------------
 // Simulation runs at a fixed rate regardless of frame rate, so gameplay
@@ -100,6 +101,10 @@ static void run(SDL_Window* window) {
                             shakeOffset(game.world, shakeTime));
         renderer.clear({12, 12, 16, 255});
         drawWorld(renderer, textures, game.world, alpha);
+
+        // UI goes on top with the shake offset removed, so it stays still.
+        renderer.setViewOrigin({});
+        drawUi(renderer, game);
 
         renderer.endFrame();
         SDL_GL_SwapWindow(window);

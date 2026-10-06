@@ -5,39 +5,37 @@
 
 namespace {
 
-// Tuning. Durations are in simulation ticks (60 per second) so they're exact.
-constexpr float kMoveSpeed = 300.0f;   // px/s
+// Tuning that boons can't change; the rest lives in PlayerStats. Durations are
+// in simulation ticks (60 per second) so they're exact.
 constexpr float kDashSpeed = 1400.0f;  // px/s -> 9 ticks covers ~210 px
 constexpr int kDashTicks = 9;          // 0.15 s
-constexpr int kDashCooldownTicks = 18; // 0.30 s, measured from dash start
 constexpr int kInputBufferTicks = 6;   // 0.10 s early-press window (dash and attack)
 
-// Attack phases. Only the active phase has a hitbox; recovery is the
+// Attack phases. Only the active phase has a hitbox; recovery (a stat) is the
 // commitment cost and can be cancelled into a dash.
 constexpr int kAttackStartupTicks = 3;
 constexpr int kAttackActiveTicks = 4;
-constexpr int kAttackRecoveryTicks = 9;
-constexpr int kAttackTotalTicks = kAttackStartupTicks + kAttackActiveTicks + kAttackRecoveryTicks;
-constexpr float kAttackReach = 30.0f;       // hitbox center, distance in front of the player
-constexpr float kAttackRadius = 30.0f;
 constexpr float kAttackLungeSpeed = 90.0f;  // px/s forward during wind-up and active
 
-constexpr float kKnockbackSpeed = 420.0f;   // px/s initial
+constexpr float kKnockbackSpeed = 420.0f;   // px/s initial, when the player is hit
 constexpr float kKnockbackDecay = 0.82f;    // per tick
-constexpr int kHitInvulnTicks = 45;         // 0.75 s
 constexpr int kHitFlashTicks = 8;
+
+int attackTotalTicks(const Player& player) {
+    return kAttackStartupTicks + kAttackActiveTicks + player.stats.attackRecoveryTicks;
+}
 
 void startDash(Player& player) {
     player.state = PlayerState::Dashing;
     player.stateTicks = kDashTicks;
     player.dashDir = player.facing;
-    player.dashCooldownTicks = kDashCooldownTicks;
+    player.dashCooldownTicks = player.stats.dashCooldownTicks;
     player.dashBufferTicks = 0;
 }
 
 void startAttack(Player& player) {
     player.state = PlayerState::Attacking;
-    player.stateTicks = kAttackTotalTicks;
+    player.stateTicks = attackTotalTicks(player);
     player.attackBufferTicks = 0;
     ++player.attackId;
 }
@@ -47,7 +45,7 @@ bool canDash(const Player& player) {
 }
 
 // Ticks elapsed in the current swing, counting the current tick (1-based).
-int attackElapsed(const Player& player) { return kAttackTotalTicks - player.stateTicks; }
+int attackElapsed(const Player& player) { return attackTotalTicks(player) - player.stateTicks; }
 
 }  // namespace
 
@@ -65,7 +63,7 @@ void hitPlayer(Player& player, Vec2 awayDir, int damage) {
         return;
     }
 
-    player.hitInvulnTicks = kHitInvulnTicks;
+    player.hitInvulnTicks = player.stats.hitInvulnTicks;
     player.knockback = awayDir * kKnockbackSpeed;
     if (player.state == PlayerState::Attacking) player.state = PlayerState::Normal;  // interrupted
 }
@@ -77,7 +75,9 @@ bool isAttackActive(const Player& player) {
 }
 
 Circle attackHitbox(const Player& player) {
-    return {player.pos + player.facing * kAttackReach, kAttackRadius};
+    // Centered one radius ahead, so the swing covers from the player's own
+    // position out to two radii in front.
+    return {player.pos + player.facing * player.stats.attackRadius, player.stats.attackRadius};
 }
 
 void bufferPlayerInput(Player& player, const Input& input) {
@@ -108,7 +108,7 @@ void updatePlayer(Player& player, const Input& input, std::span<const Rect> wall
         } else if (player.attackBufferTicks > 0) {
             startAttack(player);
         } else {
-            velocity = move * kMoveSpeed;
+            velocity = move * player.stats.moveSpeed;
         }
         break;
 
@@ -153,13 +153,13 @@ void drawPlayer(Renderer& renderer, const Player& player, float alpha) {
         uint8_t swingAlpha = 0;
         if (isAttackActive(player)) {
             swingAlpha = 150;
-        } else if (sinceActive > kAttackActiveTicks) {
-            int fadeLeft = kAttackTotalTicks - elapsed;
-            swingAlpha = static_cast<uint8_t>(90 * fadeLeft / kAttackRecoveryTicks);
+        } else if (sinceActive > kAttackActiveTicks && player.stats.attackRecoveryTicks > 0) {
+            int fadeLeft = attackTotalTicks(player) - elapsed;
+            swingAlpha = static_cast<uint8_t>(90 * fadeLeft / player.stats.attackRecoveryTicks);
         }
         if (swingAlpha > 0) {
-            renderer.drawCircle(p + player.facing * kAttackReach, kAttackRadius,
-                                {255, 240, 200, swingAlpha});
+            float radius = player.stats.attackRadius;
+            renderer.drawCircle(p + player.facing * radius, radius, {255, 240, 200, swingAlpha});
         }
     }
 
