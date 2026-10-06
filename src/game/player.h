@@ -5,6 +5,7 @@
 
 #include "engine/collision.h"
 #include "engine/math.h"
+#include "game/stats.h"
 
 class Input;
 class Renderer;
@@ -23,8 +24,8 @@ struct Player {
     float radius = 16.0f;     // collision body; also the hurtbox
     Vec2 facing{1.0f, 0.0f};  // last non-zero move direction; dash and attacks go this way
 
-    int hp = 5;
-    int maxHp = 5;
+    PlayerStats stats;        // base values plus boons; set by the Game
+    int hp = PlayerStats{}.maxHp;
 
     PlayerState state = PlayerState::Normal;
     int stateTicks = 0;       // ticks remaining in the current timed state

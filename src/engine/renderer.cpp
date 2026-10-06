@@ -8,6 +8,8 @@
 #include <string>
 #include <utility>
 
+#include "engine/font.h"
+
 namespace {
 
 constexpr int kMaxQuads = 10000;
@@ -117,7 +119,42 @@ Texture makeCircleTexture(int size) {
     return Texture::fromPixels(size, size, pixels.data(), TextureFilter::Linear);
 }
 
+// Font atlas: every glyph in a grid, white where the glyph has a pixel and
+// transparent elsewhere. Each glyph sits in a cell with a 1-texel transparent
+// border so that sampling at a glyph's edge can never pick up its neighbour.
+constexpr int kFontAtlasCols = 16;
+constexpr int kFontAtlasRows = (kFontGlyphCount + kFontAtlasCols - 1) / kFontAtlasCols;
+constexpr int kFontCell = kFontGlyphSize + 2;
+constexpr int kFontAtlasW = kFontAtlasCols * kFontCell;
+constexpr int kFontAtlasH = kFontAtlasRows * kFontCell;
+
+Texture makeFontTexture() {
+    std::vector<uint8_t> pixels(static_cast<size_t>(kFontAtlasW) * kFontAtlasH * 4, 0);
+
+    for (int glyph = 0; glyph < kFontGlyphCount; ++glyph) {
+        int cellX = (glyph % kFontAtlasCols) * kFontCell + 1;
+        int cellY = (glyph / kFontAtlasCols) * kFontCell + 1;
+        for (int row = 0; row < kFontGlyphSize; ++row) {
+            for (int col = 0; col < kFontGlyphSize; ++col) {
+                if (!((kFontGlyphs[glyph][row] >> col) & 1)) continue;
+                size_t index = (static_cast<size_t>(cellY + row) * kFontAtlasW + cellX + col) * 4;
+                pixels[index] = pixels[index + 1] = pixels[index + 2] = pixels[index + 3] = 255;
+            }
+        }
+    }
+    return Texture::fromPixels(kFontAtlasW, kFontAtlasH, pixels.data(), TextureFilter::Nearest);
+}
+
 }  // namespace
+
+float textWidth(std::string_view text, float scale) {
+    size_t longest = 0, current = 0;
+    for (char c : text) {
+        current = c == '\n' ? 0 : current + 1;
+        if (current > longest) longest = current;
+    }
+    return static_cast<float>(longest) * kTextCharWidth * scale;
+}
 
 // --- Texture -----------------------------------------------------------------
 
@@ -217,6 +254,7 @@ bool Renderer::init() {
     const uint8_t white[4] = {255, 255, 255, 255};
     white_ = Texture::fromPixels(1, 1, white);
     circle_ = makeCircleTexture(kCircleTextureSize);
+    font_ = makeFontTexture();
 
     vertices_.reserve(kMaxQuads * kVerticesPerQuad);
 
@@ -229,23 +267,33 @@ void Renderer::beginFrame(int viewportX, int viewportY, int viewportW, int viewp
                           float viewW, float viewH, Vec2 viewOrigin) {
     stats_ = {};
     gl::Viewport(viewportX, viewportY, viewportW, viewportH);
+    viewW_ = viewW;
+    viewH_ = viewH;
 
+    gl::UseProgram(program_);
+    gl::BindVertexArray(vao_);
+    gl::ActiveTexture(GL_TEXTURE0);
+    applyProjection(viewOrigin);
+}
+
+void Renderer::setViewOrigin(Vec2 viewOrigin) {
+    flush();  // what's already batched was positioned for the old origin
+    applyProjection(viewOrigin);
+}
+
+void Renderer::applyProjection(Vec2 viewOrigin) {
     // Orthographic projection (column-major): maps x [ox, ox + viewW] -> [-1, 1]
     // and y [oy, oy + viewH] -> [1, -1], so viewOrigin is the top-left corner
     // and y points down.
-    const float sx = 2.0f / viewW;
-    const float sy = -2.0f / viewH;
+    const float sx = 2.0f / viewW_;
+    const float sy = -2.0f / viewH_;
     const float projection[16] = {
         sx,                        0.0f,                     0.0f,  0.0f,
         0.0f,                      sy,                       0.0f,  0.0f,
         0.0f,                      0.0f,                     -1.0f, 0.0f,
         -1.0f - sx * viewOrigin.x, 1.0f - sy * viewOrigin.y, 0.0f,  1.0f,
     };
-
-    gl::UseProgram(program_);
     gl::UniformMatrix4fv(projectionLoc_, 1, GL_FALSE, projection);
-    gl::BindVertexArray(vao_);
-    gl::ActiveTexture(GL_TEXTURE0);
 }
 
 void Renderer::clear(Color c) {
@@ -276,6 +324,28 @@ void Renderer::drawRect(Rect dst, Color color) {
 void Renderer::drawCircle(Vec2 center, float radius, Color color) {
     drawQuad(circle_, {center.x - radius, center.y - radius, radius * 2.0f, radius * 2.0f},
              {0.0f, 0.0f, 1.0f, 1.0f}, color);
+}
+
+void Renderer::drawText(std::string_view text, Vec2 pos, float scale, Color color) {
+    const float glyphSize = kFontGlyphSize * scale;
+    const float uvW = static_cast<float>(kFontGlyphSize) / kFontAtlasW;
+    const float uvH = static_cast<float>(kFontGlyphSize) / kFontAtlasH;
+
+    Vec2 pen = pos;
+    for (char c : text) {
+        if (c == '\n') {
+            pen.x = pos.x;
+            pen.y += kTextLineHeight * scale;
+            continue;
+        }
+        if (c >= kFontFirstChar && c <= kFontLastChar) {
+            int glyph = c - kFontFirstChar;
+            float u = static_cast<float>((glyph % kFontAtlasCols) * kFontCell + 1) / kFontAtlasW;
+            float v = static_cast<float>((glyph / kFontAtlasCols) * kFontCell + 1) / kFontAtlasH;
+            drawQuad(font_, {pen.x, pen.y, glyphSize, glyphSize}, {u, v, uvW, uvH}, color);
+        }
+        pen.x += kTextCharWidth * scale;
+    }
 }
 
 void Renderer::endFrame() { flush(); }

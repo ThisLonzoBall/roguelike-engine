@@ -2,11 +2,19 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <utility>
 
 #include "engine/file.h"
+#include "engine/input.h"
 
 namespace {
+
+constexpr int kBoonChoices = 3;
+
+// The choice screen ignores input briefly after it opens, so the attack press
+// that killed the last enemy doesn't also pick a boon.
+constexpr int kMenuLockTicks = 24;
 
 std::vector<RoomDef> loadRooms(const std::string& roomDir) {
     std::vector<RoomDef> rooms;
@@ -50,13 +58,77 @@ int pickRoom(Game& game, int excludeIndex) {
 void enterRoom(Game& game, int roomIndex, int playerHp) {
     game.scripts.forgetAllEnemies();  // the old World's enemies are gone
     game.roomIndex = roomIndex;
+    game.mode = GameMode::Playing;
     game.world = createWorld(game.rooms[static_cast<size_t>(roomIndex)], game.depth, game.rng.next());
-    game.world.player.hp = playerHp;
+    game.world.player.stats = game.stats;
+    game.world.player.hp = std::min(playerHp, game.stats.maxHp);
+}
+
+// Recomputes stats from the owned boons and hands them to the player. Gaining
+// maximum health also heals by the amount gained.
+void refreshStats(Game& game) {
+    int oldMaxHp = game.stats.maxHp;
+    game.stats = game.scripts.computeStats(PlayerStats{}, game.ownedBoons);
+
+    Player& player = game.world.player;
+    player.stats = game.stats;
+    if (game.stats.maxHp > oldMaxHp) player.hp += game.stats.maxHp - oldMaxHp;
+    player.hp = std::min(player.hp, game.stats.maxHp);
 }
 
 void startRun(Game& game) {
     game.depth = 1;
-    enterRoom(game, pickRoom(game, -1), Player{}.maxHp);
+    game.ownedBoons.clear();
+    game.stats = game.scripts.computeStats(PlayerStats{}, game.ownedBoons);
+    enterRoom(game, pickRoom(game, -1), game.stats.maxHp);
+}
+
+// Picks up to kBoonChoices different boons the player can still take and
+// opens the choice screen. Does nothing if there are none left.
+void offerBoons(Game& game) {
+    const std::vector<BoonDef>& boons = game.scripts.boons();
+
+    std::vector<int> eligible;
+    for (size_t i = 0; i < boons.size(); ++i) {
+        if (boons[i].applyBroken) continue;
+        if (boonStacks(game, boons[i].name) < boons[i].maxStacks) eligible.push_back(static_cast<int>(i));
+    }
+    if (eligible.empty()) return;
+
+    // Partial Fisher-Yates shuffle: the first `count` slots end up a uniform
+    // random sample without repeats.
+    size_t count = std::min(eligible.size(), static_cast<size_t>(kBoonChoices));
+    for (size_t i = 0; i < count; ++i) {
+        size_t remaining = eligible.size() - i;
+        size_t pick = i + game.rng.next() % static_cast<uint32_t>(remaining);
+        std::swap(eligible[i], eligible[pick]);
+    }
+    eligible.resize(count);
+
+    game.offer = std::move(eligible);
+    game.cursor = static_cast<int>(count) / 2;  // start on the middle card
+    game.menuLockTicks = kMenuLockTicks;
+    game.mode = GameMode::ChoosingBoon;
+}
+
+void updateBoonChoice(Game& game, const Input& input) {
+    if (game.menuLockTicks > 0) {
+        --game.menuLockTicks;
+        return;
+    }
+
+    int count = static_cast<int>(game.offer.size());
+    if (input.pressed(Action::MoveLeft)) game.cursor = (game.cursor + count - 1) % count;
+    if (input.pressed(Action::MoveRight)) game.cursor = (game.cursor + 1) % count;
+
+    if (input.pressed(Action::Attack) || input.pressed(Action::Dash)) {
+        int boonIndex = game.offer[static_cast<size_t>(game.cursor)];
+        game.ownedBoons.push_back(game.scripts.boons()[static_cast<size_t>(boonIndex)].name);
+        refreshStats(game);
+
+        game.offer.clear();
+        game.mode = GameMode::Playing;
+    }
 }
 
 }  // namespace
@@ -81,11 +153,27 @@ void reloadAssets(Game& game) {
     for (size_t i = 0; i < game.rooms.size(); ++i) {
         if (game.rooms[i].name == currentName) index = static_cast<int>(i);
     }
-    enterRoom(game, index, game.world.player.hp > 0 ? game.world.player.hp : Player{}.maxHp);
+
+    // Boon definitions may have changed, so the stats may have too.
+    int hp = game.world.player.hp;
+    game.stats = game.scripts.computeStats(PlayerStats{}, game.ownedBoons);
+    game.offer.clear();
+    enterRoom(game, index, hp > 0 ? hp : game.stats.maxHp);
 }
 
 void updateGame(Game& game, const Input& input, float dt) {
+    if (game.mode == GameMode::ChoosingBoon) {
+        idleWorld(game.world, dt);
+        updateBoonChoice(game, input);
+        return;
+    }
+
     updateWorld(game.world, input, game.scripts, dt);
+
+    if (game.world.justCleared) {
+        game.world.justCleared = false;
+        offerBoons(game);
+    }
 
     switch (game.world.outcome) {
     case RoomOutcome::None:
@@ -102,4 +190,8 @@ void updateGame(Game& game, const Input& input, float dt) {
 
 const RoomDef& currentRoom(const Game& game) {
     return game.rooms[static_cast<size_t>(game.roomIndex)];
+}
+
+int boonStacks(const Game& game, std::string_view name) {
+    return static_cast<int>(std::count(game.ownedBoons.begin(), game.ownedBoons.end(), name));
 }

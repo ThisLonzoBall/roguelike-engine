@@ -63,6 +63,7 @@ struct World {
     std::vector<Rect> solids;       // what bodies collide with: walls, plus doors while locked
     std::vector<Vec2> spawnPoints;
     bool doorsOpen = false;
+    bool justCleared = false;       // set on the tick the last wave dies; the Game clears it
     int depth = 1;                  // how many rooms into the run this is
     RoomOutcome outcome = RoomOutcome::None;
 
@@ -96,10 +97,15 @@ WorldTextures createWorldTextures();
 // behaviour come from `scripts`.
 void updateWorld(World& world, const Input& input, Scripts& scripts, float dt);
 
+// Stands in for updateWorld while the game is showing a menu over the world:
+// gameplay is frozen, but particles and screen shake keep settling.
+void idleWorld(World& world, float dt);
+
 // View offset for screen shake. Takes wall-clock time rather than simulation
 // time so the shake keeps moving while the simulation is frozen by hitstop.
 Vec2 shakeOffset(const World& world, float timeSeconds);
 
+// Draws the room and everything in it, but no HUD (see game/ui.h).
 // alpha: 0..1 blend between the previous and current tick.
 void drawWorld(Renderer& renderer, const WorldTextures& textures, const World& world,
                float alpha);

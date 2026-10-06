@@ -13,9 +13,7 @@ namespace {
 // pushed apart every tick so they never overlap; the hitbox has to be larger
 // than the body for contact to register at all.
 constexpr float kContactHitboxPad = 4.0f;
-constexpr int kAttackDamage = 1;
 
-constexpr float kEnemyKnockbackSpeed = 520.0f;  // px/s initial -> ~48 px total
 constexpr float kKnockbackDecay = 0.82f;        // per tick
 constexpr int kEnemyStunTicks = 14;
 constexpr int kEnemyHitFlashTicks = 6;
@@ -35,7 +33,6 @@ constexpr int kWaveDelayTicks = 90;
 constexpr int kRespawnDelayTicks = 90;
 constexpr int kMaxEnemiesPerWave = 8;
 constexpr float kMinSpawnDistance = 250.0f;  // from the player
-constexpr int kHealOnClear = 1;
 constexpr float kTraumaOnClear = 0.2f;
 
 constexpr Color kPlayerColor{230, 110, 60, 255};
@@ -139,10 +136,11 @@ void spawnWave(World& world, const Scripts& scripts) {
 
 void openDoors(World& world) {
     world.doorsOpen = true;
+    world.justCleared = true;
     world.solids = world.walls;  // doors stop being solid
 
     Player& player = world.player;
-    player.hp = std::min(player.maxHp, player.hp + kHealOnClear);
+    player.hp = std::min(player.stats.maxHp, player.hp + player.stats.healOnClear);
 
     for (const Rect& door : world.doors) {
         Vec2 center{door.x + door.w / 2.0f, door.y + door.h / 2.0f};
@@ -235,8 +233,8 @@ void resolvePlayerAttack(World& world, Scripts& scripts) {
         if (lengthSq(away) == 0.0f) away = player.facing;
 
         enemy.lastHitByAttack = player.attackId;
-        enemy.hp -= kAttackDamage;
-        enemy.knockback = away * kEnemyKnockbackSpeed;
+        enemy.hp -= player.stats.attackDamage;
+        enemy.knockback = away * player.stats.attackKnockback;
         enemy.stunTicks = kEnemyStunTicks;
         enemy.hitFlashTicks = kEnemyHitFlashTicks;
 
@@ -355,6 +353,12 @@ void updateWorld(World& world, const Input& input, Scripts& scripts, float dt) {
     if (world.doorsOpen && touchesAnyDoor(world)) world.outcome = RoomOutcome::Exited;
 }
 
+void idleWorld(World& world, float dt) {
+    world.trauma = std::max(0.0f, world.trauma - kTraumaDecayPerTick);
+    freezeInterpolation(world);
+    updateParticles(world, dt);
+}
+
 Vec2 shakeOffset(const World& world, float timeSeconds) {
     // Squaring trauma makes small hits subtle and big hits violent. Two sines
     // at unrelated frequencies give a cheap jitter with no RNG, so shake never
@@ -367,7 +371,7 @@ void drawWorld(Renderer& renderer, const WorldTextures& textures, const World& w
                float alpha) {
     // Draw order is back to front. Consecutive quads sharing a texture batch
     // into one draw call, so each group below is one call: floor, walls,
-    // every circle, then bars and HUD.
+    // every circle, then health bars.
 
     // UVs beyond 1.0 make the repeat-wrapped texture tile; each texel is one tile.
     renderer.drawQuad(textures.floor, {0.0f, 0.0f, kRoomWidth, kRoomHeight},
@@ -403,21 +407,5 @@ void drawWorld(Renderer& renderer, const WorldTextures& textures, const World& w
         renderer.drawRect(bar, {20, 20, 28, 220});
         bar.w = kBarW * static_cast<float>(enemy.hp) / static_cast<float>(enemy.maxHp);
         renderer.drawRect(bar, {220, 60, 60, 255});
-    }
-
-    // HUD: player health pips.
-    constexpr float kPip = 18.0f, kPipGap = 6.0f;
-    for (int i = 0; i < world.player.maxHp; ++i) {
-        Rect pip{48.0f + i * (kPip + kPipGap), 48.0f, kPip, kPip};
-        renderer.drawRect(pip, i < world.player.hp ? Color{220, 60, 60, 255}
-                                                   : Color{60, 40, 45, 255});
-    }
-
-    // HUD: one small marker per room reached in this run.
-    constexpr float kMark = 8.0f, kMarkGap = 4.0f;
-    constexpr int kMaxMarks = 40;
-    for (int i = 0; i < std::min(world.depth, kMaxMarks); ++i) {
-        float x = kRoomWidth - 48.0f - kMark - static_cast<float>(i) * (kMark + kMarkGap);
-        renderer.drawRect({x, 53.0f, kMark, kMark}, {250, 210, 90, 255});
     }
 }

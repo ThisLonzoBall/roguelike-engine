@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 #include <vector>
 
 #include "engine/gl.h"
@@ -42,6 +43,14 @@ private:
     int height_ = 0;
 };
 
+// Text is drawn with a built-in 8x8 monospace font. At `scale` 1 a character
+// cell is 8 view units wide and a line is 10 tall.
+constexpr float kTextCharWidth = 8.0f;
+constexpr float kTextLineHeight = 10.0f;
+
+// Width of the longest line of `text` at `scale`, in view units.
+float textWidth(std::string_view text, float scale);
+
 // 2D sprite batcher. Every draw call appends a textured quad to a CPU-side
 // vertex buffer; the batch is uploaded and drawn in a single GL draw call
 // when the texture changes, the buffer fills up, or the frame ends.
@@ -63,10 +72,21 @@ public:
     // shown at the top-left corner (used for screen shake; a camera later).
     void beginFrame(int viewportX, int viewportY, int viewportW, int viewportH, float viewW,
                     float viewH, Vec2 viewOrigin = {});
+
+    // Changes the view origin mid-frame. Everything drawn so far is flushed
+    // with the old origin. Used to draw UI on top of a shaking world without
+    // the UI shaking too.
+    void setViewOrigin(Vec2 viewOrigin);
+
     void clear(Color color);
     void drawQuad(const Texture& texture, Rect dst, Rect uv, Color tint = {});
     void drawRect(Rect dst, Color color);
     void drawCircle(Vec2 center, float radius, Color color);
+
+    // Draws printable ASCII with `pos` as the top-left corner. '\n' starts a
+    // new line; other characters without a glyph are left blank.
+    void drawText(std::string_view text, Vec2 pos, float scale, Color color);
+
     void endFrame();
 
     struct Stats {
@@ -83,6 +103,10 @@ private:
     };
 
     void flush();
+    void applyProjection(Vec2 viewOrigin);
+
+    float viewW_ = 1.0f;
+    float viewH_ = 1.0f;
 
     GLuint program_ = 0;
     GLint projectionLoc_ = -1;
@@ -92,6 +116,7 @@ private:
 
     Texture white_;
     Texture circle_;
+    Texture font_;
     std::vector<Vertex> vertices_;
     GLuint batchTexture_ = 0;
     Stats stats_;

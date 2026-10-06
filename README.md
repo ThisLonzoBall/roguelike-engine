@@ -11,6 +11,7 @@ A Hades-style action roguelike and the small custom engine underneath it, writte
 - **Milestone 5** — Melee attack, health and death, enemy waves, knockback, hitstop, screen shake, particles
 - **Milestone 6** — Rooms loaded from text files, locked doors, a run of randomly chosen rooms, hot reload
 - **Milestone 7** — Embedded Lua: enemy types and their behaviour are defined in scripts
+- **Milestone 8** — Boons (scripted upgrades chosen after each room), player stats as data, bitmap-font text, a UI layer
 
 ## Controls
 
@@ -19,6 +20,7 @@ A Hades-style action roguelike and the small custom engine underneath it, writte
 | Move | WASD or arrow keys |
 | Dash | Space or Left Shift |
 | Attack | J or X |
+| Choose a boon | A / D or arrow keys, then J or Space |
 | Reload rooms and scripts | F5 |
 | Quit | Esc |
 
@@ -71,6 +73,21 @@ Enemy {
 
 The full list of fields, and what `self` and `ctx` contain, is documented at the top of `assets/scripts/enemies.lua`.
 
+Boons live in `assets/scripts/boons.lua`. After each cleared room the game offers three; the one you pick lasts until the run ends. A boon is a name, a description and an `apply` function that edits the player's stats:
+
+```lua
+Boon {
+    name = "Heavy Blow",
+    desc = "Attacks deal +1 damage.",
+    max_stacks = 2,
+    apply = function(stats)
+        stats.attack_damage = stats.attack_damage + 1
+    end,
+}
+```
+
+The stat names and their base values are listed at the top of `boons.lua`.
+
 Scripts run in a sandbox: no file or OS access, a cap on how long one call may run, and `rand()` in place of `math.random` so runs stay repeatable from a seed. A script error is logged with its file and line, and that enemy type falls back to walking at the player until the scripts are reloaded.
 
 ## Building
@@ -89,11 +106,11 @@ On Windows you can also open the folder directly in Visual Studio, which picks u
 ```
 assets/
   rooms/       room layouts (.room text files)
-  scripts/     enemy types and behaviour (.lua)
+  scripts/     enemy types, enemy behaviour and boons (.lua)
 src/
   main.cpp     entry point and game loop
-  engine/      GL loader, renderer, input, collision, files, Lua VM, math, RNG
-  game/        run and room flow, room parser, script bindings, world, player
+  engine/      GL loader, renderer and font, input, collision, files, Lua VM, math, RNG
+  game/        run and room flow, room parser, script bindings, world, player, UI
 ```
 
 Engine code never includes game headers; includes are written relative to `src/`.

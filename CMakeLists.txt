@@ -52,6 +52,7 @@ add_executable(game
     src/game/player.cpp
     src/game/room.cpp
     src/game/scripts.cpp
+    src/game/ui.cpp
     src/game/world.cpp
 )
 target_include_directories(game PRIVATE src)
