@@ -10,14 +10,24 @@
 #include "game/room.h"
 
 class Input;
+class Scripts;
 
+// Stats are copied from the enemy's scripted type when it spawns.
 struct Enemy {
+    int type = 0;          // index into Scripts::enemyTypes()
+    uint32_t id = 0;       // unique within the World; keys the enemy's script state
+    int ageTicks = 0;
+
     Vec2 pos;
     Vec2 prevPos;          // position at the previous tick, for render interpolation
     float radius = 14.0f;  // collision body; also the hurtbox
+    Color color;
+    bool hasTint = false;  // script override of `color`, e.g. to telegraph an attack
+    Color tint;
 
     int hp = 3;
     int maxHp = 3;
+    int contactDamage = 1;
 
     Vec2 knockback;        // px/s, decays every tick
     int stunTicks = 0;     // can't chase or deal contact damage while >0
@@ -58,6 +68,7 @@ struct World {
 
     Player player;
     std::vector<Enemy> enemies;
+    uint32_t nextEnemyId = 1;
     std::vector<Particle> particles;
 
     Rng rng;                 // all simulation randomness comes from here
@@ -81,8 +92,9 @@ struct WorldTextures {
 World createWorld(const RoomDef& room, int depth, uint32_t seed);
 WorldTextures createWorldTextures();
 
-// Advances the whole world by one fixed simulation tick.
-void updateWorld(World& world, const Input& input, float dt);
+// Advances the whole world by one fixed simulation tick. Enemy types and
+// behaviour come from `scripts`.
+void updateWorld(World& world, const Input& input, Scripts& scripts, float dt);
 
 // View offset for screen shake. Takes wall-clock time rather than simulation
 // time so the shake keeps moving while the simulation is frozen by hitstop.

@@ -48,6 +48,7 @@ int pickRoom(Game& game, int excludeIndex) {
 }
 
 void enterRoom(Game& game, int roomIndex, int playerHp) {
+    game.scripts.forgetAllEnemies();  // the old World's enemies are gone
     game.roomIndex = roomIndex;
     game.world = createWorld(game.rooms[static_cast<size_t>(roomIndex)], game.depth, game.rng.next());
     game.world.player.hp = playerHp;
@@ -60,19 +61,21 @@ void startRun(Game& game) {
 
 }  // namespace
 
-Game createGame(std::string roomDir, uint32_t seed) {
+Game createGame(std::string assetDir, uint32_t seed) {
     Game game;
-    game.roomDir = std::move(roomDir);
-    game.rooms = loadRooms(game.roomDir);
+    game.assetDir = std::move(assetDir);
+    game.rooms = loadRooms(game.assetDir + "/rooms");
+    game.scripts.load(game.assetDir + "/scripts");
     game.rng.state = seed != 0 ? seed : 1;  // xorshift can't start at zero
     startRun(game);
     return game;
 }
 
-void reloadRooms(Game& game) {
+void reloadAssets(Game& game) {
     // Stay in the same room if it still exists after the reload.
     std::string currentName = currentRoom(game).name;
-    game.rooms = loadRooms(game.roomDir);
+    game.rooms = loadRooms(game.assetDir + "/rooms");
+    game.scripts.load(game.assetDir + "/scripts");
 
     int index = 0;
     for (size_t i = 0; i < game.rooms.size(); ++i) {
@@ -82,7 +85,7 @@ void reloadRooms(Game& game) {
 }
 
 void updateGame(Game& game, const Input& input, float dt) {
-    updateWorld(game.world, input, dt);
+    updateWorld(game.world, input, game.scripts, dt);
 
     switch (game.world.outcome) {
     case RoomOutcome::None:

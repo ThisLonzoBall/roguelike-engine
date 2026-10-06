@@ -1,6 +1,6 @@
 # Roguelike Engine
 
-A Hades-style action roguelike and the small custom engine underneath it, written in C++20 on top of SDL3 and OpenGL 3.3.
+A Hades-style action roguelike and the small custom engine underneath it, written in C++20 on top of SDL3 and OpenGL 3.3, with gameplay scripted in Lua.
 
 ## Progress
 
@@ -10,6 +10,7 @@ A Hades-style action roguelike and the small custom engine underneath it, writte
 - **Milestone 4** — World with walls and chasing enemies, circle/box collision, contact hits with i-frames
 - **Milestone 5** — Melee attack, health and death, enemy waves, knockback, hitstop, screen shake, particles
 - **Milestone 6** — Rooms loaded from text files, locked doors, a run of randomly chosen rooms, hot reload
+- **Milestone 7** — Embedded Lua: enemy types and their behaviour are defined in scripts
 
 ## Controls
 
@@ -18,7 +19,7 @@ A Hades-style action roguelike and the small custom engine underneath it, writte
 | Move | WASD or arrow keys |
 | Dash | Space or Left Shift |
 | Attack | J or X |
-| Reload room files | F5 |
+| Reload rooms and scripts | F5 |
 | Quit | Esc |
 
 ## Rooms
@@ -48,9 +49,33 @@ The map is always 32 columns by 18 rows.
 
 A file that doesn't parse is skipped, and the reason is logged with its line number.
 
+## Scripts
+
+Enemy types live in `assets/scripts/*.lua`. Each `Enemy { ... }` block gives a type its stats and, optionally, a `think` function that runs every simulation tick and returns the velocity the enemy wants. The engine keeps doing collision, knockback and damage.
+
+```lua
+Enemy {
+    name = "chaser",
+    hp = 3,
+    speed = 140,
+    radius = 14,
+    color = {120, 200, 90},
+    weight = 4,
+
+    think = function(self, ctx)
+        if ctx.dist <= ctx.reach then return 0, 0 end
+        return ctx.dir_x * self.speed, ctx.dir_y * self.speed
+    end,
+}
+```
+
+The full list of fields, and what `self` and `ctx` contain, is documented at the top of `assets/scripts/enemies.lua`.
+
+Scripts run in a sandbox: no file or OS access, a cap on how long one call may run, and `rand()` in place of `math.random` so runs stay repeatable from a seed. A script error is logged with its file and line, and that enemy type falls back to walking at the player until the scripts are reloaded.
+
 ## Building
 
-Requires CMake 3.24+ and a C++20 compiler. SDL3 is fetched and built from source on first configure, then linked statically.
+Requires CMake 3.24+ and a C++20 compiler. SDL3 and Lua 5.4 are fetched and built from source on first configure, then linked statically.
 
 ```sh
 cmake -B build
@@ -64,10 +89,11 @@ On Windows you can also open the folder directly in Visual Studio, which picks u
 ```
 assets/
   rooms/       room layouts (.room text files)
+  scripts/     enemy types and behaviour (.lua)
 src/
   main.cpp     entry point and game loop
-  engine/      GL loader, renderer, input, collision, files, math, RNG
-  game/        run and room flow, room parser, world, player, enemies
+  engine/      GL loader, renderer, input, collision, files, Lua VM, math, RNG
+  game/        run and room flow, room parser, script bindings, world, player
 ```
 
 Engine code never includes game headers; includes are written relative to `src/`.

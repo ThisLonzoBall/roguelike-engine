@@ -22,16 +22,16 @@ constexpr double kDt = 1.0 / kTickRate;
 // long stall (breakpoint, window drag) where we'd try to catch up forever.
 constexpr double kMaxFrameTime = 0.25;
 
-// Room files are read from the source tree in development builds, so edits
-// show up without rebuilding (and F5 reloads them live). Otherwise they're
-// expected in an assets/ folder next to the executable.
-static std::string findRoomDir() {
+// Rooms and scripts are read from the source tree in development builds, so
+// edits show up without rebuilding (and F5 reloads them live). Otherwise
+// they're expected in an assets/ folder next to the executable.
+static std::string findAssetDir() {
 #ifdef GAME_DEV_ASSET_DIR
-    std::string devDir = std::string(GAME_DEV_ASSET_DIR) + "/rooms";
+    std::string devDir = GAME_DEV_ASSET_DIR;
     if (directoryExists(devDir)) return devDir;
 #endif
     const char* basePath = SDL_GetBasePath();
-    return std::string(basePath ? basePath : "") + "assets/rooms";
+    return std::string(basePath ? basePath : "") + "assets";
 }
 
 // --- Game loop -----------------------------------------------------------------
@@ -42,7 +42,7 @@ static void run(SDL_Window* window) {
     if (!renderer.init()) return;
 
     WorldTextures textures = createWorldTextures();
-    Game game = createGame(findRoomDir(), static_cast<uint32_t>(SDL_GetPerformanceCounter()));
+    Game game = createGame(findAssetDir(), static_cast<uint32_t>(SDL_GetPerformanceCounter()));
     Input input;
 
     Uint64 previousTime = SDL_GetTicksNS();
@@ -60,7 +60,7 @@ static void run(SDL_Window* window) {
             if (event.type == SDL_EVENT_QUIT) running = false;
             if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
                 if (event.key.key == SDLK_ESCAPE) running = false;
-                if (event.key.key == SDLK_F5) reloadRooms(game);
+                if (event.key.key == SDLK_F5) reloadAssets(game);
             }
             input.handleEvent(event);
         }
