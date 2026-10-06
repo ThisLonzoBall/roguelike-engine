@@ -4,18 +4,15 @@
 #include <cmath>
 
 #include "engine/collision.h"
+#include "game/scripts.h"
 
 namespace {
 
-
 // --- Tuning (durations in ticks, 60 per second) ------------------------------
-constexpr float kEnemySpeed = 140.0f;  // px/s
-
 // The enemy's touch hitbox extends this far beyond its solid body. Bodies are
 // pushed apart every tick so they never overlap; the hitbox has to be larger
 // than the body for contact to register at all.
 constexpr float kContactHitboxPad = 4.0f;
-constexpr int kContactDamage = 1;
 constexpr int kAttackDamage = 1;
 
 constexpr float kEnemyKnockbackSpeed = 520.0f;  // px/s initial -> ~48 px total
@@ -41,7 +38,6 @@ constexpr float kMinSpawnDistance = 250.0f;  // from the player
 constexpr int kHealOnClear = 1;
 constexpr float kTraumaOnClear = 0.2f;
 
-constexpr Color kEnemyColor{120, 200, 90, 255};
 constexpr Color kPlayerColor{230, 110, 60, 255};
 constexpr Color kSparkColor{255, 240, 200, 255};
 constexpr Color kDoorLockedColor{120, 60, 50, 255};
@@ -97,14 +93,23 @@ void freezeInterpolation(World& world) {
 
 // --- Spawning ----------------------------------------------------------------
 
-void spawnEnemy(World& world, Vec2 point) {
+void spawnEnemy(World& world, const Scripts& scripts, Vec2 point) {
+    int typeIndex = scripts.pickEnemyType(world.depth, world.rng);
+    const EnemyType& type = scripts.enemyTypes()[static_cast<size_t>(typeIndex)];
+
     Enemy enemy;
+    enemy.type = typeIndex;
+    enemy.id = world.nextEnemyId++;
     enemy.pos = enemy.prevPos = point;
+    enemy.radius = type.radius;
+    enemy.color = type.color;
+    enemy.hp = enemy.maxHp = type.hp;
+    enemy.contactDamage = type.contactDamage;
     world.enemies.push_back(enemy);
-    spawnBurst(world, point, {}, 8, 160.0f, kEnemyColor);
+    spawnBurst(world, point, {}, 8, 160.0f, type.color);
 }
 
-void spawnWave(World& world) {
+void spawnWave(World& world, const Scripts& scripts) {
     --world.wavesRemaining;
 
     // One enemy per spawn point at most; deeper rooms use more of them.
@@ -123,7 +128,7 @@ void spawnWave(World& world) {
             if (used[index]) continue;
             if (pass == 0 && length(point - world.player.pos) < kMinSpawnDistance) continue;
 
-            spawnEnemy(world, point);
+            spawnEnemy(world, scripts, point);
             used[index] = true;
             --count;
         }
@@ -156,23 +161,37 @@ bool touchesAnyDoor(const World& world) {
 
 // --- Simulation --------------------------------------------------------------
 
-void updateEnemies(World& world, float dt) {
+void updateEnemies(World& world, Scripts& scripts, float dt) {
     Player& player = world.player;
 
     for (Enemy& enemy : world.enemies) {
         enemy.prevPos = enemy.pos;
+        ++enemy.ageTicks;
         if (enemy.hitFlashTicks > 0) --enemy.hitFlashTicks;
+        bool stunned = enemy.stunTicks > 0;
+        if (stunned) --enemy.stunTicks;
 
-        // Chase: walk straight at the player. No pathfinding yet, so enemies
-        // get stuck behind walls. Stunned enemies only slide from knockback.
-        Vec2 velocity = enemy.knockback;
-        if (enemy.stunTicks > 0) {
-            --enemy.stunTicks;
-        } else {
-            Vec2 toPlayer = player.pos - enemy.pos;
-            float reach = enemy.radius + player.radius;
-            if (lengthSq(toPlayer) > reach * reach) velocity += normalize(toPlayer) * kEnemySpeed;
-        }
+        // The script decides where the enemy wants to go; the engine does the
+        // rest. Think runs even while stunned (so scripts can react to being
+        // hit), but its movement is ignored: stunned enemies only slide from
+        // knockback.
+        ThinkInput in;
+        in.type = enemy.type;
+        in.id = enemy.id;
+        in.pos = enemy.pos;
+        in.hp = enemy.hp;
+        in.ageTicks = enemy.ageTicks;
+        in.stunned = stunned;
+        in.radius = enemy.radius;
+        in.playerPos = player.pos;
+        in.playerRadius = player.radius;
+        in.dt = dt;
+        in.depth = world.depth;
+        ThinkResult thought = scripts.think(in, world.rng);
+        enemy.hasTint = thought.hasTint;
+        enemy.tint = thought.tint;
+
+        Vec2 velocity = enemy.knockback + thought.velocity;
 
         enemy.knockback = enemy.knockback * kKnockbackDecay;
         if (lengthSq(enemy.knockback) < 1.0f) enemy.knockback = {};
@@ -203,7 +222,7 @@ void updateEnemies(World& world, float dt) {
 }
 
 // The player's swing hitbox vs. enemy hurtboxes.
-void resolvePlayerAttack(World& world) {
+void resolvePlayerAttack(World& world, Scripts& scripts) {
     Player& player = world.player;
     if (!isAttackActive(player)) return;
 
@@ -222,7 +241,8 @@ void resolvePlayerAttack(World& world) {
         enemy.hitFlashTicks = kEnemyHitFlashTicks;
 
         if (enemy.hp <= 0) {
-            spawnBurst(world, enemy.pos, {}, 18, 320.0f, kEnemyColor);
+            scripts.forgetEnemy(enemy.id);
+            spawnBurst(world, enemy.pos, {}, 18, 320.0f, enemy.color);
             addHitstop(world, kHitstopOnKill);
             addTrauma(world, kTraumaOnKill);
         } else {
@@ -244,14 +264,14 @@ void resolveContactHits(World& world) {
 
     Circle hurtbox{player.pos, player.radius};
     for (const Enemy& enemy : world.enemies) {
-        if (enemy.stunTicks > 0) continue;
+        if (enemy.stunTicks > 0 || enemy.contactDamage <= 0) continue;
         Circle hitbox{enemy.pos, enemy.radius + kContactHitboxPad};
         if (!circlesOverlap(hitbox, hurtbox)) continue;
 
         Vec2 away = normalize(player.pos - enemy.pos);
         if (lengthSq(away) == 0.0f) away = -player.facing;
 
-        hitPlayer(player, away, kContactDamage);
+        hitPlayer(player, away, enemy.contactDamage);
         addHitstop(world, kHitstopOnPlayerHit);
         addTrauma(world, kTraumaOnPlayerHit);
         if (player.state == PlayerState::Dead) {
@@ -298,7 +318,7 @@ WorldTextures createWorldTextures() {
     return textures;
 }
 
-void updateWorld(World& world, const Input& input, float dt) {
+void updateWorld(World& world, const Input& input, Scripts& scripts, float dt) {
     world.trauma = std::max(0.0f, world.trauma - kTraumaDecayPerTick);
 
     // Hitstop: skip the whole simulation for a few ticks so the hit registers
@@ -319,8 +339,8 @@ void updateWorld(World& world, const Input& input, float dt) {
     }
 
     updatePlayer(world.player, input, world.solids, dt);
-    updateEnemies(world, dt);
-    resolvePlayerAttack(world);
+    updateEnemies(world, scripts, dt);
+    resolvePlayerAttack(world, scripts);
     resolveContactHits(world);
     updateParticles(world, dt);
 
@@ -329,7 +349,7 @@ void updateWorld(World& world, const Input& input, float dt) {
         if (world.wavesRemaining == 0) {
             openDoors(world);
         } else if (--world.waveDelayTicks <= 0) {
-            spawnWave(world);
+            spawnWave(world, scripts);
         }
     }
     if (world.doorsOpen && touchesAnyDoor(world)) world.outcome = RoomOutcome::Exited;
@@ -359,7 +379,9 @@ void drawWorld(Renderer& renderer, const WorldTextures& textures, const World& w
     }
 
     for (const Enemy& enemy : world.enemies) {
-        Color color = enemy.hitFlashTicks > 0 ? Color{255, 255, 255, 255} : kEnemyColor;
+        Color color = enemy.hitFlashTicks > 0 ? Color{255, 255, 255, 255}
+                      : enemy.hasTint         ? enemy.tint
+                                              : enemy.color;
         renderer.drawCircle(lerp(enemy.prevPos, enemy.pos, alpha), enemy.radius, color);
     }
 
